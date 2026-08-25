@@ -1,10 +1,60 @@
-export const config = {
-  runtime: "edge",
-};
+import path from "node:path";
+import url from "node:url";
 
-import server from "../dist/server/index.js";
+let serverPromise;
+async function getServer() {
+  if (!serverPromise) {
+    const serverPath = path.resolve(process.cwd(), "dist/server/server.js");
+    serverPromise = import(url.pathToFileURL(serverPath).href).then(
+      (m) => m.default?.default || m.default
+    );
+  }
+  return serverPromise;
+}
 
-export default async function handler(request) {
-  const handlerObj = server.default || server;
-  return handlerObj.fetch(request, {}, {});
+export default async function handler(req, res) {
+  try {
+    const server = await getServer();
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
+    const fullUrl = `${protocol}://${host}${req.url}`;
+
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value !== undefined) {
+        if (Array.isArray(value)) {
+          value.forEach((v) => headers.append(key, v));
+        } else {
+          headers.set(key, value);
+        }
+      }
+    }
+
+    const init = {
+      method: req.method,
+      headers,
+    };
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      // In Node.js Serverless function on Vercel, req is a readable stream
+      init.body = req;
+      init.duplex = "half";
+    }
+
+    const webReq = new Request(fullUrl, init);
+    const webRes = await server.fetch(webReq, {}, {});
+
+    res.statusCode = webRes.status;
+    webRes.headers.forEach((val, key) => {
+      res.setHeader(key, val);
+    });
+
+    const arrayBuffer = await webRes.arrayBuffer();
+    res.end(Buffer.from(arrayBuffer));
+  } catch (err) {
+    console.error("Vercel handler error:", err);
+    res.statusCode = 500;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end(err.stack || String(err));
+  }
 }
