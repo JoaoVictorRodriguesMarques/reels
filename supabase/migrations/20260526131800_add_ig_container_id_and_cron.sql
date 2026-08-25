@@ -11,7 +11,7 @@ SELECT cron.schedule(
   '* * * * *',
   $$
   SELECT net.http_get(
-    url := 'https://fzmzdodpiedpjnxyiyis.supabase.co/functions/v1/publish-reels',
+    url := 'https://mbvjnqaufjykgpjkudju.supabase.co/functions/v1/publish-reels',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || current_setting('supabase.service_role_key', true)
