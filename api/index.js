@@ -30,18 +30,20 @@ export default async function handler(req, res) {
       }
     }
 
-    const init = {
-      method: req.method,
-      headers,
-    };
-
+    let body = undefined;
     if (req.method !== "GET" && req.method !== "HEAD") {
-      // In Node.js Serverless function on Vercel, req is a readable stream
-      init.body = req;
-      init.duplex = "half";
+      const chunks = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
+      body = Buffer.concat(chunks);
     }
 
-    const webReq = new Request(fullUrl, init);
+    const webReq = new Request(fullUrl, {
+      method: req.method,
+      headers,
+      body,
+    });
     const webRes = await server.fetch(webReq, {}, {});
 
     res.statusCode = webRes.status;

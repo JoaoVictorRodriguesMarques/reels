@@ -66,6 +66,7 @@ async function fetchWithRetry(
   retries = 3,
   delay = 2000,
 ): Promise<Response> {
+  let lastError: any = null;
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(url, options);
@@ -74,14 +75,19 @@ async function fetchWithRetry(
       }
       console.warn(`Upload attempt ${i + 1} failed with status ${response.status}. Retrying...`);
     } catch (error) {
+      lastError = error;
       console.warn(`Upload attempt ${i + 1} encountered network error:`, error);
-      if (i === retries - 1) throw error;
+      if (i === retries - 1) {
+        throw new Error(
+          `Falha de conexão com Cloudflare R2: ${error instanceof Error ? error.message : "Failed to fetch"}`,
+        );
+      }
     }
     if (i < retries - 1) {
       await new Promise((resolve) => setTimeout(resolve, delay * Math.pow(2, i)));
     }
   }
-  throw new Error(`Falha no upload após ${retries} tentativas.`);
+  throw new Error(`Falha no upload para o Cloudflare R2 após ${retries} tentativas.`);
 }
 
 function BulkSchedulePage() {
