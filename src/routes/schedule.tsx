@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { getUploadPresignedUrl } from "@/lib/r2.functions";
 
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const Route = createFileRoute("/schedule")({
@@ -35,6 +36,7 @@ function SchedulePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
+  const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
   const [publishMode, setPublishMode] = useState<"now" | "schedule">(() => {
     const saved = localStorage.getItem("last_scheduled_publish_mode");
     return saved === "now" || saved === "schedule" ? saved : "now";
@@ -192,15 +194,35 @@ function SchedulePage() {
       const scheduledDate =
         publishMode === "now" ? new Date().toISOString() : new Date(scheduledAt).toISOString();
 
-      const postsToInsert = accountIds.map((accId) => ({
-        user_id: uid,
-        instagram_account_id: accId,
-        video_url: videoUrl,
-        cover_url: coverUrl,
-        caption,
-        scheduled_at: scheduledDate,
-        status: "pending" as const,
-      }));
+      const postsToInsert: any[] = [];
+
+      accountIds.forEach((accId) => {
+        // 1. Post normal
+        postsToInsert.push({
+          user_id: uid,
+          instagram_account_id: accId,
+          video_url: videoUrl,
+          cover_url: coverUrl,
+          caption,
+          scheduled_at: scheduledDate,
+          status: "pending" as const,
+          is_trial: false,
+        });
+
+        // 2. Post teste para não-seguidores (se marcado)
+        if (postAsTrialAlso) {
+          postsToInsert.push({
+            user_id: uid,
+            instagram_account_id: accId,
+            video_url: videoUrl,
+            cover_url: coverUrl,
+            caption,
+            scheduled_at: scheduledDate,
+            status: "pending" as const,
+            is_trial: true,
+          });
+        }
+      });
 
       const { error } = await supabase.from("scheduled_posts").insert(postsToInsert);
       if (error) throw error;
@@ -488,6 +510,32 @@ function SchedulePage() {
               <DateTimePicker value={scheduledAt} onChange={setScheduledAt} min={minDateTime} />
             </div>
           )}
+
+          {/* Trial Reels Option */}
+          <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-2">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <span className="text-xl shrink-0 mt-0.5">🧪</span>
+                <div>
+                  <Label
+                    htmlFor="trial-reels-toggle"
+                    className="text-sm font-semibold cursor-pointer text-foreground"
+                  >
+                    Postar também como Reels Teste (Não-seguidores)
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                    Publica o Reel normal e também uma versão de teste entregue pela Meta exclusivamente para quem ainda não segue o perfil.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="trial-reels-toggle"
+                checked={postAsTrialAlso}
+                onCheckedChange={setPostAsTrialAlso}
+                className="shrink-0"
+              />
+            </div>
+          </div>
 
           <Button
             type="submit"

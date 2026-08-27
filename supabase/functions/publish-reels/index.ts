@@ -272,6 +272,13 @@ Deno.serve(async (req: Request) => {
             access_token: ig.access_token,
           };
 
+          if ((post as any).is_trial) {
+            console.log(`[${post.id}] 🧪 Setting up as Trial Reel (delivered to non-followers)...`);
+            body.trial_params = {
+              graduation_strategy: "MANUAL",
+            };
+          }
+
           if (post.cover_url) {
             console.log(`[${post.id}] Using custom cover image: ${post.cover_url}`);
             body.cover_url = post.cover_url;

@@ -125,6 +125,7 @@ function BulkSchedulePage() {
 
   // Randomize state
   const [randomize, setRandomize] = useState(false);
+  const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
 
@@ -535,6 +536,7 @@ function BulkSchedulePage() {
           // Construct date time slot in local time representation
           const scheduledDate = new Date(year, month - 1, day + dayIndex, hours, minutes, 0, 0);
 
+          // 1. Post normal
           postsToInsert.push({
             user_id: uid,
             instagram_account_id: accId,
@@ -543,7 +545,22 @@ function BulkSchedulePage() {
             caption,
             scheduled_at: scheduledDate.toISOString(),
             status: "pending",
+            is_trial: false,
           });
+
+          // 2. Post teste para não-seguidores (se marcado)
+          if (postAsTrialAlso) {
+            postsToInsert.push({
+              user_id: uid,
+              instagram_account_id: accId,
+              video_url: uploadedUrls[videoIdx],
+              cover_url: coverUrl,
+              caption,
+              scheduled_at: scheduledDate.toISOString(),
+              status: "pending",
+              is_trial: true,
+            });
+          }
         });
       });
 
@@ -1094,6 +1111,21 @@ function BulkSchedulePage() {
               </div>
             </div>
 
+            {/* Trial Reels Option */}
+            <div className="pt-4 border-t border-border/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <Label className="text-sm font-bold flex items-center gap-1.5 text-foreground">
+                  <span className="text-base">🧪</span> Postar também como Reels Teste (Não-seguidores)
+                </Label>
+                <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
+                  Gera 2 publicações para cada agendamento: o Reel normal no feed e a versão de teste entregue pela Meta exclusivamente para não-seguidores.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <Switch checked={postAsTrialAlso} onCheckedChange={setPostAsTrialAlso} />
+              </div>
+            </div>
+
             {/* Submit Button */}
             <Button
               type="submit"
@@ -1110,7 +1142,7 @@ function BulkSchedulePage() {
                   <Loader2 className="size-4 animate-spin mr-2" /> Agendando...
                 </>
               ) : (
-                `Agendar ${slots.length} Publicações`
+                `Agendar ${slots.length * (postAsTrialAlso ? 2 : 1)} Publicações${postAsTrialAlso ? " (Normais + Testes)" : ""}`
               )}
             </Button>
           </form>

@@ -47,6 +47,8 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 
+import { Switch } from "@/components/ui/switch";
+
 export const Route = createFileRoute("/calendar")({
   head: () => ({ meta: [{ title: "Calendário Editorial — Reelary" }] }),
   component: () => (
@@ -70,6 +72,7 @@ interface Post {
   cover_url: string | null;
   scheduled_at: string;
   status: "pending" | "published" | "failed";
+  is_trial?: boolean;
   instagram_account_id: string;
   instagram_accounts: {
     username: string;
@@ -93,6 +96,7 @@ function CalendarPage() {
   // Form State
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
+  const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
   const [publishMode, setPublishMode] = useState<"now" | "schedule">(() => {
     const saved = localStorage.getItem("last_scheduled_publish_mode");
     return saved === "now" || saved === "schedule" ? saved : "now";
@@ -185,7 +189,7 @@ function CalendarPage() {
         let query = supabase
           .from("scheduled_posts")
           .select(
-            "id, caption, video_url, cover_url, scheduled_at, status, instagram_account_id, instagram_accounts(username, category_id, account_categories(id, name, color))",
+            "id, caption, video_url, cover_url, scheduled_at, status, is_trial, instagram_account_id, instagram_accounts(username, category_id, account_categories(id, name, color))",
           )
           .gte("scheduled_at", startOfMonth)
           .lte("scheduled_at", endOfMonth)
@@ -351,16 +355,35 @@ function CalendarPage() {
       const scheduledDate =
         publishMode === "now" ? new Date().toISOString() : new Date(scheduledAt).toISOString();
 
-      // Insert scheduled post record
-      const postsToInsert = accountIds.map((accId) => ({
-        user_id: uid,
-        instagram_account_id: accId,
-        video_url: videoUrl,
-        cover_url: coverUrl,
-        caption,
-        scheduled_at: scheduledDate,
-        status: "pending" as const,
-      }));
+      // Insert scheduled post record (normal + trial if selected)
+      const postsToInsert: any[] = [];
+      accountIds.forEach((accId) => {
+        // 1. Post normal
+        postsToInsert.push({
+          user_id: uid,
+          instagram_account_id: accId,
+          video_url: videoUrl,
+          cover_url: coverUrl,
+          caption,
+          scheduled_at: scheduledDate,
+          status: "pending" as const,
+          is_trial: false,
+        });
+
+        // 2. Post teste
+        if (postAsTrialAlso) {
+          postsToInsert.push({
+            user_id: uid,
+            instagram_account_id: accId,
+            video_url: videoUrl,
+            cover_url: coverUrl,
+            caption,
+            scheduled_at: scheduledDate,
+            status: "pending" as const,
+            is_trial: true,
+          });
+        }
+      });
 
       const { error } = await supabase.from("scheduled_posts").insert(postsToInsert);
 
@@ -751,7 +774,10 @@ function CalendarPage() {
                               title={`@${p.instagram_accounts?.username}: ${p.status}`}
                             >
                               <span className="shrink-0 text-[8px] opacity-75">{postTime}</span>
-                              <span className="truncate">@{p.instagram_accounts?.username}</span>
+                              <span className="truncate">
+                                @{p.instagram_accounts?.username}
+                                {p.is_trial ? " 🧪" : ""}
+                              </span>
                             </div>
                           );
                         })}
@@ -878,6 +904,14 @@ function CalendarPage() {
                                   minute: "2-digit",
                                 })}
                               </span>
+                              {post.is_trial && (
+                                <>
+                                  <span className="text-muted-foreground">•</span>
+                                  <span className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-primary/15 text-primary border border-primary/30">
+                                    🧪 Teste (Não-seguidores)
+                                  </span>
+                                </>
+                              )}
                             </div>
                             <p className="text-xs text-foreground/80 mt-2 line-clamp-2 leading-relaxed">
                               {post.caption || (
@@ -1194,6 +1228,32 @@ function CalendarPage() {
                   placeholder="Escreva a legenda incrível para o seu Reels... Insira #hashtags e marque @amigos."
                   className="bg-secondary/40 border-border/60 rounded-xl"
                 />
+              </div>
+
+              {/* Trial Reels Option */}
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <span className="text-lg shrink-0">🧪</span>
+                    <div>
+                      <Label
+                        htmlFor="calendar-trial-reels-toggle"
+                        className="text-xs font-semibold cursor-pointer text-foreground"
+                      >
+                        Postar também como Reels Teste (Não-seguidores)
+                      </Label>
+                      <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">
+                        Cria 2 publicações: o Reel normal e a versão de teste entregue pela Meta exclusivamente para não-seguidores.
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    id="calendar-trial-reels-toggle"
+                    checked={postAsTrialAlso}
+                    onCheckedChange={setPostAsTrialAlso}
+                    className="shrink-0"
+                  />
+                </div>
               </div>
 
               {/* Botão de Submit */}

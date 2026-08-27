@@ -46,6 +46,7 @@ type Post = {
   scheduled_at: string;
   status: "pending" | "published" | "failed";
   error_message: string | null;
+  is_trial?: boolean;
   instagram_account_id: string;
   instagram_accounts: {
     username: string;
@@ -123,7 +124,7 @@ function PostsPage() {
     const { data, error } = await supabase
       .from("scheduled_posts")
       .select(
-        "id, caption, video_url, cover_url, scheduled_at, status, error_message, instagram_account_id, instagram_accounts(username, category_id, account_categories(color))",
+        "id, caption, video_url, cover_url, scheduled_at, status, error_message, is_trial, instagram_account_id, instagram_accounts(username, category_id, account_categories(color))",
       )
       .order("scheduled_at", { ascending: true })
       .range(startOffset, endOffset);
@@ -485,6 +486,14 @@ function PostsPage() {
                               timeStyle: "short",
                             })}
                           </span>
+                          {p.is_trial && (
+                            <>
+                              <span>•</span>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-primary/15 text-primary border border-primary/30">
+                                🧪 Reels Teste (Não-seguidores)
+                              </span>
+                            </>
+                          )}
                         </div>
                         <p className="mt-1.5 text-sm line-clamp-2 text-foreground/90">
                           {p.caption || (

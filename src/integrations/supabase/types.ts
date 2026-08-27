@@ -88,6 +88,7 @@ export type Database = {
           id: string;
           ig_container_id: string | null;
           instagram_account_id: string;
+          is_trial: boolean;
           published_at: string | null;
           scheduled_at: string;
           status: Database["public"]["Enums"]["post_status"];
@@ -103,6 +104,7 @@ export type Database = {
           id?: string;
           ig_container_id?: string | null;
           instagram_account_id: string;
+          is_trial?: boolean;
           published_at?: string | null;
           scheduled_at: string;
           status?: Database["public"]["Enums"]["post_status"];
@@ -118,6 +120,7 @@ export type Database = {
           id?: string;
           ig_container_id?: string | null;
           instagram_account_id?: string;
+          is_trial?: boolean;
           published_at?: string | null;
           scheduled_at?: string;
           status?: Database["public"]["Enums"]["post_status"];
