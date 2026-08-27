@@ -108,6 +108,19 @@ export function parseErrorMessage(rawError: string | null | undefined): ParsedEr
     };
   }
 
+  // ─── API Access Blocked / Meta Security Checkpoint ───
+  if (
+    lower.includes("api access blocked") ||
+    (metaCode === 200 && lower.includes("blocked"))
+  ) {
+    return {
+      icon: "🚫",
+      label: "Acesso Bloqueado pela Meta (API)",
+      description:
+        "A Meta bloqueou temporariamente as chamadas de API deste App. Isso ocorre por proteção anti-spam após disparos rápidos ou por pendências de verificação/segurança no painel Meta for Developers (developers.facebook.com).",
+    };
+  }
+
   // ─── Container Creation Failure (generic) ───
   if (lower.includes("container creation failed")) {
     return {
