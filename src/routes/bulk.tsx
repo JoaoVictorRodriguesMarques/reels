@@ -15,6 +15,7 @@ import {
   Sparkles,
   Info,
   Layers,
+  ShieldCheck,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getUploadPresignedUrl } from "@/lib/r2.functions";
+import { sanitizeMp4Metadata } from "@/lib/mp4-sanitizer";
 
 export const Route = createFileRoute("/bulk")({
   head: () => ({ meta: [{ title: "Postar em Massa — Reelary" }] }),
@@ -126,6 +128,7 @@ function BulkSchedulePage() {
   // Randomize state
   const [randomize, setRandomize] = useState(false);
   const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
+  const [cleanMetadata, setCleanMetadata] = useState(true);
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
 
@@ -445,20 +448,28 @@ function BulkSchedulePage() {
           continue;
         }
 
-        setUploadStatus(`Enviando vídeo ${i + 1} de ${totalVideos}: ${fileObj.name}...`);
+        let fileToUpload = fileObj;
+        if (cleanMetadata) {
+          setUploadStatus(
+            `Higienizando metadados e gerando hash único para o vídeo ${i + 1} de ${totalVideos}...`,
+          );
+          fileToUpload = await sanitizeMp4Metadata(fileObj, { uniqueSeed: i });
+        }
+
+        setUploadStatus(`Enviando vídeo ${i + 1} de ${totalVideos}: ${fileToUpload.name}...`);
 
         const videoUpload = await getUploadPresignedUrl({
           data: {
-            fileName: fileObj.name,
-            contentType: fileObj.type || "video/mp4",
+            fileName: fileToUpload.name,
+            contentType: fileToUpload.type || "video/mp4",
           },
         });
 
         await fetchWithRetry(videoUpload.uploadUrl, {
           method: "PUT",
-          body: fileObj,
+          body: fileToUpload,
           headers: {
-            "Content-Type": fileObj.type || "video/mp4",
+            "Content-Type": fileToUpload.type || "video/mp4",
           },
         });
 
@@ -1123,6 +1134,21 @@ function BulkSchedulePage() {
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 <Switch checked={postAsTrialAlso} onCheckedChange={setPostAsTrialAlso} />
+              </div>
+            </div>
+
+            {/* Clean Metadata Option */}
+            <div className="pt-4 border-t border-border/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <Label className="text-sm font-bold flex items-center gap-1.5 text-foreground">
+                  <ShieldCheck className="size-4 text-emerald-400" /> Limpeza de Metadados & Hash Único (Anti-Detecção)
+                </Label>
+                <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
+                  Remove tags de câmera/edição, renova timestamps do vídeo e gera uma assinatura binária (hash) 100% exclusiva para cada post, dificultando que o Instagram identifique o mesmo vídeo.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <Switch checked={cleanMetadata} onCheckedChange={setCleanMetadata} />
               </div>
             </div>
 

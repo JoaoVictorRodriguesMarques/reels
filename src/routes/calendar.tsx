@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { getUploadPresignedUrl, deleteR2File } from "@/lib/r2.functions";
+import { sanitizeMp4Metadata } from "@/lib/mp4-sanitizer";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -289,11 +290,18 @@ function CalendarPage() {
       const uid = userData.user?.id;
       if (!uid) throw new Error("Sessão expirada. Faça login novamente.");
 
+      let fileToUpload = videoFile;
+      try {
+        fileToUpload = await sanitizeMp4Metadata(videoFile);
+      } catch (err) {
+        console.warn("Could not sanitize file, uploading original:", err);
+      }
+
       // 1. Upload Video to Cloudflare R2
       const videoUpload = await getUploadPresignedUrl({
         data: {
-          fileName: videoFile.name,
-          contentType: videoFile.type || "video/mp4",
+          fileName: fileToUpload.name,
+          contentType: fileToUpload.type || "video/mp4",
         },
       });
 
@@ -301,9 +309,9 @@ function CalendarPage() {
       try {
         videoPutRes = await fetch(videoUpload.uploadUrl, {
           method: "PUT",
-          body: videoFile,
+          body: fileToUpload,
           headers: {
-            "Content-Type": videoFile.type || "video/mp4",
+            "Content-Type": fileToUpload.type || "video/mp4",
           },
         });
       } catch (fetchErr: any) {

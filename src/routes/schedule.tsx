@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { getUploadPresignedUrl } from "@/lib/r2.functions";
+import { sanitizeMp4Metadata } from "@/lib/mp4-sanitizer";
 
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -128,11 +129,18 @@ function SchedulePage() {
       const uid = userData.user?.id;
       if (!uid) throw new Error("Sessão expirada");
 
+      let fileToUpload = file;
+      try {
+        fileToUpload = await sanitizeMp4Metadata(file);
+      } catch (err) {
+        console.warn("Could not sanitize file, uploading original:", err);
+      }
+
       // 1. Upload Video to Cloudflare R2
       const videoUpload = await getUploadPresignedUrl({
         data: {
-          fileName: file.name,
-          contentType: file.type || "video/mp4",
+          fileName: fileToUpload.name,
+          contentType: fileToUpload.type || "video/mp4",
         },
       });
 
@@ -140,9 +148,9 @@ function SchedulePage() {
       try {
         videoPutRes = await fetch(videoUpload.uploadUrl, {
           method: "PUT",
-          body: file,
+          body: fileToUpload,
           headers: {
-            "Content-Type": file.type || "video/mp4",
+            "Content-Type": fileToUpload.type || "video/mp4",
           },
         });
       } catch (fetchErr: any) {
