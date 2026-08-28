@@ -523,10 +523,33 @@ function CalendarPage() {
     return [...prevMonthPadding, ...currentMonthDays, ...nextMonthPadding];
   }, [currentMonth]);
 
-  const selectedDateKey = useMemo(() => {
-    const d = selectedDate;
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }, [selectedDate]);
+  // Navigation between months
+  const navigateMonth = (direction: "prev" | "next") => {
+    const newMonth = new Date(currentMonth);
+    if (direction === "prev") {
+      newMonth.setMonth(currentMonth.getMonth() - 1);
+    } else {
+      newMonth.setMonth(currentMonth.getMonth() + 1);
+    }
+    setCurrentMonth(newMonth);
+  };
+
+  const monthNames = [
+    "Janeiro",
+    "Fevereiro",
+    "Março",
+    "Abril",
+    "Maio",
+    "Junho",
+    "Julho",
+    "Agosto",
+    "Setembro",
+    "Outubro",
+    "Novembro",
+    "Dezembro",
+  ];
+
+  const dayOfWeekNames = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
   // Filter posts for selected day (O(1) instant lookup)
   const postsOnSelectedDay = useMemo(() => {
