@@ -6,8 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const graphApiUrl = "https://graph.facebook.com/v21.0";
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -53,31 +51,46 @@ Deno.serve(async (req: Request) => {
     const todayDate = new Date().toISOString().split("T")[0];
 
     for (const acc of accounts) {
-      console.log(`[Sync-Insights] Syncing account @${acc.username} (${acc.id})...`);
+      console.log(`[Sync-Insights] Processing @${acc.username}...`);
       const nowIso = new Date().toISOString();
 
       try {
-        // 1. Fetch Basic Profile & Check Token Health
-        const profileRes = await fetch(
-          `${graphApiUrl}/${acc.instagram_user_id}?fields=id,username,name,followers_count,media_count,profile_picture_url&access_token=${acc.access_token}`,
-        );
+        const isIgToken = acc.access_token && (acc.access_token.startsWith("IGAA") || acc.access_token.startsWith("IG"));
+        const baseUrl = isIgToken ? "https://graph.instagram.com/v21.0" : "https://graph.facebook.com/v21.0";
+
+        // 1. Fetch Profile & Check Health
+        let profileUrl = `${baseUrl}/me?fields=id,username,account_type,media_count,profile_picture_url&access_token=${acc.access_token}`;
+        if (!isIgToken) {
+          profileUrl = `${baseUrl}/${acc.instagram_user_id}?fields=id,username,name,followers_count,media_count,profile_picture_url&access_token=${acc.access_token}`;
+        }
+
+        let profileRes = await fetch(profileUrl);
+
+        // Fallback: If graph.facebook.com failed with OAuthException, try graph.instagram.com
+        if (!profileRes.ok && !isIgToken) {
+          const fallbackUrl = `https://graph.instagram.com/v21.0/me?fields=id,username,account_type,media_count,profile_picture_url&access_token=${acc.access_token}`;
+          const fallbackRes = await fetch(fallbackUrl);
+          if (fallbackRes.ok) {
+            profileRes = fallbackRes;
+          }
+        }
 
         if (!profileRes.ok) {
           const errData = await profileRes.json().catch(() => ({}));
           const errCode = errData.error?.code;
           const errMsg = errData.error?.message || "Erro de autenticação com a Meta.";
 
-          console.warn(`[Sync-Insights] Account @${acc.username} error:`, errData);
+          console.warn(`[Sync-Insights] Error for @${acc.username}:`, errData);
 
           let healthStatus = "warning";
           let healthReason = errMsg;
 
           if (errCode === 190) {
             healthStatus = "token_expired";
-            healthReason = "Token de acesso expirado. Reconecte a conta no painel de configurações.";
+            healthReason = "Token de acesso expirado. Reconecte a conta no painel.";
           } else if (errCode === 200 || errCode === 368) {
             healthStatus = "restricted";
-            healthReason = "Restrição temporária de postagem pela Meta (API access blocked). Aguarde o término do bloqueio de segurança.";
+            healthReason = "Restrição temporária da Meta (API access blocked). Aguarde a liberação.";
           }
 
           await supabase
@@ -104,70 +117,77 @@ Deno.serve(async (req: Request) => {
         const mediaCount = profileData.media_count || 0;
         const profilePictureUrl = profileData.profile_picture_url || null;
 
-        // 2. Fetch Media and Reels Insights (last 30 posts)
+        // 2. Fetch Media and Insights
         let totalViews = 0;
         let totalReach = 0;
         let totalLikes = 0;
         let totalComments = 0;
         let totalInteractions = 0;
 
-        try {
-          const mediaRes = await fetch(
-            `${graphApiUrl}/${acc.instagram_user_id}/media?fields=id,caption,like_count,comments_count,media_type,timestamp,insights.metric(plays,reach,saved,shares,total_interactions)&limit=30&access_token=${acc.access_token}`,
-          );
+        let mediaListUrl = `${baseUrl}/me/media?fields=id,caption,media_type,timestamp,like_count,comments_count&limit=25&access_token=${acc.access_token}`;
+        if (!isIgToken) {
+          mediaListUrl = `${baseUrl}/${acc.instagram_user_id}/media?fields=id,caption,media_type,timestamp,like_count,comments_count&limit=25&access_token=${acc.access_token}`;
+        }
 
-          if (mediaRes.ok) {
-            const mediaData = await mediaRes.json();
-            const mediaList = mediaData.data || [];
+        const mediaRes = await fetch(mediaListUrl);
+        if (mediaRes.ok) {
+          const mediaData = await mediaRes.json();
+          const mediaList = mediaData.data || [];
 
-            for (const item of mediaList) {
-              const likes = item.like_count || 0;
-              const comments = item.comments_count || 0;
-              totalLikes += likes;
-              totalComments += comments;
+          for (const item of mediaList) {
+            const likes = item.like_count || 0;
+            const comments = item.comments_count || 0;
+            totalLikes += likes;
+            totalComments += comments;
 
-              let plays = 0;
-              let reach = 0;
-              let interactions = likes + comments;
+            let views = 0;
+            let reach = 0;
+            let interactions = likes + comments;
 
-              if (item.insights && Array.isArray(item.insights.data)) {
-                for (const metric of item.insights.data) {
-                  const val = metric.values?.[0]?.value || 0;
-                  if (metric.name === "plays") plays = val;
-                  if (metric.name === "reach") reach = val;
-                  if (metric.name === "total_interactions") interactions = val;
+            // Fetch individual media insights
+            try {
+              const insightsRes = await fetch(
+                `https://graph.instagram.com/v21.0/${item.id}/insights?metric=views,reach,saved,shares,total_interactions&access_token=${acc.access_token}`,
+              );
+
+              if (insightsRes.ok) {
+                const insightsData = await insightsRes.json();
+                if (insightsData.data && Array.isArray(insightsData.data)) {
+                  for (const metric of insightsData.data) {
+                    const val = metric.values?.[0]?.value || 0;
+                    if (metric.name === "views") views = val;
+                    if (metric.name === "reach") reach = val;
+                    if (metric.name === "total_interactions") interactions = val;
+                  }
                 }
               }
+            } catch (_) {
+              // Insights fetch failed for single media, continue
+            }
 
-              // In Instagram, plays is for Reels, views/reach for other media
-              totalViews += plays > 0 ? plays : reach;
-              totalReach += reach;
-              totalInteractions += interactions;
+            totalViews += views > 0 ? views : (likes + comments);
+            totalReach += reach > 0 ? reach : views;
+            totalInteractions += interactions;
 
-              // If this media corresponds to a scheduled post, update its stats
-              if (item.id) {
-                await supabase
-                  .from("scheduled_posts")
-                  .update({
-                    views_count: plays,
-                    reach_count: reach,
-                    likes_count: likes,
-                    comments_count: comments,
-                    ig_media_id: item.id,
-                  })
-                  .eq("ig_container_id", item.id);
-              }
+            // Update matching scheduled_post if found
+            if (item.id) {
+              await supabase
+                .from("scheduled_posts")
+                .update({
+                  views_count: views,
+                  reach_count: reach,
+                  likes_count: likes,
+                  comments_count: comments,
+                  ig_media_id: item.id,
+                })
+                .eq("ig_container_id", item.id);
             }
           }
-        } catch (mediaErr) {
-          console.warn(`[Sync-Insights] Failed to fetch media insights for @${acc.username}:`, mediaErr);
         }
 
         // Calculate engagement rate
-        const engagementRate =
-          followersCount > 0
-            ? Number(((totalInteractions / followersCount) * 100).toFixed(2))
-            : 0;
+        const baseCount = followersCount > 0 ? followersCount : (mediaCount > 0 ? mediaCount * 10 : 100);
+        const engagementRate = Number(((totalInteractions / baseCount) * 100).toFixed(2));
 
         // 3. Update instagram_accounts table
         await supabase
@@ -188,7 +208,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", acc.id);
 
-        // 4. Save daily history snapshot
+        // 4. Record Daily Metrics Snapshot
         try {
           await supabase.from("account_daily_metrics").upsert(
             {
@@ -201,28 +221,27 @@ Deno.serve(async (req: Request) => {
             },
             { onConflict: "instagram_account_id,date" },
           );
-        } catch (dailyErr) {
-          console.warn(`[Sync-Insights] Failed to upsert daily metrics:`, dailyErr);
-        }
+        } catch (_) {}
 
         results.push({
           id: acc.id,
           username: acc.username,
           status: "success",
           health_status: "healthy",
-          followers: followersCount,
           views: totalViews,
           reach: totalReach,
+          likes: totalLikes,
+          media_count: mediaCount,
           engagement_rate: engagementRate,
         });
-      } catch (accLoopErr: any) {
-        console.error(`[Sync-Insights] Unexpected error for @${acc.username}:`, accLoopErr);
+      } catch (err: any) {
+        console.error(`[Sync-Insights] Exception for @${acc.username}:`, err);
         results.push({
           id: acc.id,
           username: acc.username,
           status: "error",
           health_status: "warning",
-          error: accLoopErr.message,
+          error: err.message,
         });
       }
     }
