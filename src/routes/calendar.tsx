@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, useMemo } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import {
   Video,
   Plus,
@@ -15,11 +16,9 @@ import {
   ExternalLink,
   RefreshCw,
   Search,
-  Filter,
   Play,
-  X,
   Layers,
-  Flame,
+  Calendar as CalendarIcon,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -33,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { deleteR2File } from "@/lib/r2.functions";
+import { getPublishedReelsWithPerformance } from "@/lib/instagram.functions";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -58,7 +58,24 @@ interface Account {
   account_categories: { id: string; name: string; color: string } | null;
 }
 
-interface Post {
+interface PublishedMedia {
+  id: string;
+  instagram_account_id: string;
+  username: string;
+  profile_picture_url: string | null;
+  account_categories: { id: string; name: string; color: string } | null;
+  caption: string;
+  media_url: string;
+  thumbnail_url: string;
+  permalink: string;
+  timestamp: string;
+  likes_count: number;
+  comments_count: number;
+  views_count: number;
+  reach_count: number;
+}
+
+interface ScheduledPost {
   id: string;
   caption: string;
   video_url: string;
@@ -66,11 +83,6 @@ interface Post {
   scheduled_at: string;
   status: "pending" | "published" | "failed";
   is_trial?: boolean;
-  views_count?: number;
-  reach_count?: number;
-  likes_count?: number;
-  comments_count?: number;
-  ig_media_id?: string | null;
   instagram_account_id: string;
   instagram_accounts: {
     username: string;
@@ -84,8 +96,8 @@ function PublicationsFlowPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [publishedPosts, setPublishedPosts] = useState<Post[]>([]);
-  const [upcomingPosts, setUpcomingPosts] = useState<Post[]>([]);
+  const [publishedMedia, setPublishedMedia] = useState<PublishedMedia[]>([]);
+  const [upcomingPosts, setUpcomingPosts] = useState<ScheduledPost[]>([]);
   const [totalPublishedCount, setTotalPublishedCount] = useState(0);
   const [totalPendingCount, setTotalPendingCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -94,6 +106,8 @@ function PublicationsFlowPage() {
 
   // Video preview modal
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+
+  const fetchPublishedMedia = useServerFn(getPublishedReelsWithPerformance);
 
   // 1. Load accounts
   async function loadAccounts() {
@@ -110,27 +124,19 @@ function PublicationsFlowPage() {
     }
   }
 
-  // 2. Load latest 10 published posts + next 10 upcoming posts
-  async function loadPostsData() {
+  // 2. Load latest 10 published posts with real performance & next 10 scheduled posts
+  async function loadData() {
     try {
-      // Query 1: Last 10 published posts with metrics
-      let publishedQuery = supabase
-        .from("scheduled_posts")
-        .select(
-          "id, caption, video_url, cover_url, scheduled_at, status, is_trial, views_count, reach_count, likes_count, comments_count, ig_media_id, instagram_account_id, instagram_accounts(username, profile_picture_url, category_id, account_categories(id, name, color))",
-        )
-        .eq("status", "published")
-        .order("scheduled_at", { ascending: false })
-        .limit(10);
+      // 1. Fetch real published media from Meta Graph API
+      const pubList = await fetchPublishedMedia({
+        data: {
+          accountId: selectedAccountId,
+          limit: 10,
+        },
+      });
+      setPublishedMedia((pubList as any) || []);
 
-      if (selectedAccountId !== "all") {
-        publishedQuery = publishedQuery.eq("instagram_account_id", selectedAccountId);
-      }
-
-      const { data: pubData } = await publishedQuery;
-      setPublishedPosts((pubData as any) || []);
-
-      // Query 2: Next 10 scheduled posts on queue
+      // 2. Fetch next 10 upcoming scheduled posts from database
       let upcomingQuery = supabase
         .from("scheduled_posts")
         .select(
@@ -147,7 +153,7 @@ function PublicationsFlowPage() {
       const { data: upData } = await upcomingQuery;
       setUpcomingPosts((upData as any) || []);
 
-      // Query 3: Totals
+      // 3. Totals
       const { count: pubCount } = await supabase
         .from("scheduled_posts")
         .select("*", { count: "exact", head: true })
@@ -160,7 +166,7 @@ function PublicationsFlowPage() {
         .eq("status", "pending");
       setTotalPendingCount(pendCount || 0);
     } catch (err) {
-      console.error("Error loading posts flow:", err);
+      console.error("Error loading publications flow:", err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -168,7 +174,7 @@ function PublicationsFlowPage() {
   }
 
   // Handle delete post
-  async function handleDeletePost(post: Post) {
+  async function handleDeletePost(post: ScheduledPost) {
     if (!confirm("Tem certeza que deseja cancelar e excluir este agendamento?")) return;
 
     setDeletingId(post.id);
@@ -202,25 +208,25 @@ function PublicationsFlowPage() {
   }, []);
 
   useEffect(() => {
-    loadPostsData();
+    loadData();
   }, [selectedAccountId]);
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
-    await loadPostsData();
-    toast.success("Lista de publicações atualizada!");
+    await loadData();
+    toast.success("Métricas e agendamentos atualizados!");
   };
 
-  // Filtered lists by search
+  // Filtered lists
   const filteredPublished = useMemo(() => {
-    if (!searchQuery) return publishedPosts;
+    if (!searchQuery) return publishedMedia;
     const q = searchQuery.toLowerCase();
-    return publishedPosts.filter(
+    return publishedMedia.filter(
       (p) =>
-        p.instagram_accounts?.username.toLowerCase().includes(q) ||
+        p.username.toLowerCase().includes(q) ||
         p.caption?.toLowerCase().includes(q),
     );
-  }, [publishedPosts, searchQuery]);
+  }, [publishedMedia, searchQuery]);
 
   const filteredUpcoming = useMemo(() => {
     if (!searchQuery) return upcomingPosts;
@@ -233,22 +239,22 @@ function PublicationsFlowPage() {
   }, [upcomingPosts, searchQuery]);
 
   return (
-    <div className="space-y-8 animate-in fade-in-50 duration-300 pb-16">
+    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in-50 duration-300 pb-16">
       {/* ═════════════════════════════════════════════════════════════════ */}
       {/* 1. Header & Actions */}
       {/* ═════════════════════════════════════════════════════════════════ */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text text-transparent">
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
               Fluxo de Publicações & Performance
             </h1>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/25">
-              <Sparkles className="size-3" /> Tempo Real
+              <Sparkles className="size-3" /> Meta API v21.0
             </span>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Monitore os últimos 10 Reels publicados com sucesso e a performance em tempo real, além dos próximos 10 agendamentos na fila.
+            Acompanhe a performance real dos últimos Reels postados no Instagram e os próximos da fila.
           </p>
         </div>
 
@@ -257,20 +263,20 @@ function PublicationsFlowPage() {
             onClick={handleManualRefresh}
             disabled={refreshing}
             variant="outline"
-            className="border-border/60 hover:bg-secondary h-10 px-3.5 text-xs font-bold rounded-xl gap-2 shadow-sm"
+            className="border-border/60 hover:bg-secondary h-10 px-3.5 text-xs font-bold rounded-xl gap-2 shadow-sm cursor-pointer"
           >
             <RefreshCw className={`size-3.5 text-primary ${refreshing ? "animate-spin" : ""}`} />
             Atualizar
           </Button>
 
           <Link to="/bulk">
-            <Button variant="outline" className="border-border/60 hover:bg-secondary h-10 px-3.5 text-xs font-bold rounded-xl gap-2">
+            <Button variant="outline" className="border-border/60 hover:bg-secondary h-10 px-3.5 text-xs font-bold rounded-xl gap-2 cursor-pointer">
               <Layers className="size-4 text-purple-400" /> Postar em Massa
             </Button>
           </Link>
 
           <Link to="/schedule">
-            <Button className="bg-gradient-brand text-primary-foreground border-0 hover:opacity-90 h-10 px-4 text-xs font-bold rounded-xl shadow-glow gap-2">
+            <Button className="bg-gradient-brand text-primary-foreground border-0 hover:opacity-90 h-10 px-4 text-xs font-bold rounded-xl shadow-glow gap-2 cursor-pointer">
               <Plus className="size-4" /> Novo Reel
             </Button>
           </Link>
@@ -278,9 +284,10 @@ function PublicationsFlowPage() {
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════ */}
-      {/* 2. Quick Summary Cards & Filters */}
+      {/* 2. Quick Filters */}
       {/* ═════════════════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Total Published */}
         <div className="rounded-2xl border border-border/50 bg-card/60 p-4 backdrop-blur-sm shadow-card flex items-center gap-3.5">
           <div className="size-11 rounded-xl bg-emerald-500/10 text-emerald-400 grid place-items-center shrink-0">
             <CheckCircle2 className="size-5" />
@@ -289,116 +296,109 @@ function PublicationsFlowPage() {
             <div className="text-xl font-extrabold text-foreground">
               {totalPublishedCount.toLocaleString("pt-BR")}
             </div>
-            <span className="text-xs text-muted-foreground font-medium">Reels Publicados</span>
+            <span className="text-xs text-muted-foreground font-medium">Reels já Publicados</span>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-primary/30 bg-primary/[0.04] p-4 backdrop-blur-sm shadow-card flex items-center gap-3.5">
-          <div className="size-11 rounded-xl bg-primary/15 text-primary grid place-items-center shrink-0 shadow-glow">
-            <Clock className="size-5" />
-          </div>
-          <div>
-            <div className="text-xl font-extrabold text-primary">
-              {totalPendingCount.toLocaleString("pt-BR")}
-            </div>
-            <span className="text-xs text-muted-foreground font-medium">Reels na Fila</span>
-          </div>
+        {/* Filter by Account */}
+        <div>
+          <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
+            <SelectTrigger className="h-full min-h-[58px] bg-card/60 border-border/50 rounded-2xl px-4 text-xs font-bold">
+              <div className="flex items-center gap-2">
+                <Instagram className="size-4 text-primary" />
+                <SelectValue placeholder="Filtrar por Conta" />
+              </div>
+            </SelectTrigger>
+            <SelectContent className="bg-popover border-border/60">
+              <SelectItem value="all">Todas as Contas ({accounts.length})</SelectItem>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  <span className="flex items-center gap-2 font-semibold">
+                    {a.account_categories && (
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ backgroundColor: a.account_categories.color }}
+                      />
+                    )}
+                    @{a.username}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="rounded-2xl border border-border/50 bg-card/60 p-4 backdrop-blur-sm shadow-card flex items-center gap-3.5 col-span-2">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full">
-            {/* Filter by Account */}
-            <div className="flex-1">
-              <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
-                <SelectTrigger className="h-9 text-xs bg-secondary/50 border-border/50 rounded-xl">
-                  <SelectValue placeholder="Todas as Contas" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border/60">
-                  <SelectItem value="all">Todas as Contas ({accounts.length})</SelectItem>
-                  {accounts.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      <span className="flex items-center gap-1.5">
-                        {a.account_categories && (
-                          <span
-                            className="size-2 rounded-full"
-                            style={{ backgroundColor: a.account_categories.color }}
-                          />
-                        )}
-                        @{a.username}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Search Filter */}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-              <Input
-                placeholder="Buscar legenda..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 h-9 text-xs bg-secondary/50 border-border/50 rounded-xl"
-              />
-            </div>
-          </div>
+        {/* Search Input */}
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por legenda..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 h-full min-h-[58px] text-xs bg-card/60 border-border/50 rounded-2xl font-medium"
+          />
         </div>
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════ */}
-      {/* 3. Section: Últimos 10 Reels Postados com Sucesso & Performance */}
+      {/* 3. SECTION 1: ÚLTIMOS 10 REELS PUBLICADOS COM SUCESSO & PERFORMANCE */}
       {/* ═════════════════════════════════════════════════════════════════ */}
-      <div className="rounded-2xl border border-border/60 bg-card/40 backdrop-blur-sm p-6 shadow-card space-y-5">
+      <div className="rounded-2xl border border-border/60 bg-card/40 backdrop-blur-sm p-6 shadow-card space-y-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="size-9 rounded-xl bg-emerald-500/10 text-emerald-400 grid place-items-center">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-emerald-500/10 text-emerald-400 grid place-items-center shadow-sm">
               <CheckCircle2 className="size-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-foreground">
-                Últimos 10 Reels Postados com Sucesso
+              <h2 className="text-lg font-bold text-foreground">
+                Últimos 10 Reels Publicados com Sucesso
               </h2>
               <p className="text-xs text-muted-foreground">
-                Métricas de reproduções, alcance e interações coletadas direto da Meta.
+                Métricas reais de visualizações, alcance, curtidas e comentários obtidas direto da Meta.
               </p>
             </div>
           </div>
 
-          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            {filteredPublished.length} de 10 exibidos
+          <span className="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            {filteredPublished.length} Reels
           </span>
         </div>
 
-        {filteredPublished.length === 0 ? (
-          <div className="p-10 text-center text-xs text-muted-foreground space-y-2">
+        {loading ? (
+          <div className="p-12 text-center text-xs text-muted-foreground">
+            Carregando publicações e métricas da Meta...
+          </div>
+        ) : filteredPublished.length === 0 ? (
+          <div className="p-12 text-center text-xs text-muted-foreground space-y-2">
             <Video className="size-8 mx-auto opacity-40 text-muted-foreground" />
-            <p>Nenhum Reel publicado encontrado com os filtros selecionados.</p>
+            <p>Nenhuma publicação encontrada no Instagram para os filtros aplicados.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredPublished.map((post) => {
-              const account = post.instagram_accounts;
-              const formattedDate = new Date(post.scheduled_at).toLocaleString("pt-BR", {
-                dateStyle: "short",
-                timeStyle: "short",
+          <div className="divide-y divide-border/30">
+            {filteredPublished.map((post, idx) => {
+              const formattedDate = new Date(post.timestamp).toLocaleString("pt-BR", {
+                day: "2-digit",
+                month: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
               });
 
               return (
                 <div
-                  key={post.id}
-                  className="rounded-2xl border border-border/50 bg-secondary/15 p-4 hover:border-emerald-500/30 hover:bg-secondary/25 transition flex flex-col justify-between space-y-4 shadow-sm"
+                  key={post.id || idx}
+                  className="py-4.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-secondary/15 px-3 rounded-2xl transition"
                 >
-                  <div className="flex items-start gap-3.5">
+                  {/* Left: Thumbnail & Info */}
+                  <div className="flex items-start sm:items-center gap-4 min-w-0 flex-1">
                     {/* Media Thumbnail */}
                     <div
-                      onClick={() => post.video_url && setPreviewVideoUrl(post.video_url)}
-                      className="relative size-16 rounded-xl bg-background overflow-hidden shrink-0 cursor-pointer group ring-1 ring-border/50"
+                      onClick={() => post.media_url && setPreviewVideoUrl(post.media_url)}
+                      className="relative size-16 rounded-xl bg-background overflow-hidden shrink-0 cursor-pointer group ring-1 ring-border/50 shadow-sm"
                       title="Clique para reproduzir"
                     >
-                      {post.cover_url ? (
+                      {post.thumbnail_url ? (
                         <img
-                          src={post.cover_url}
+                          src={post.thumbnail_url}
                           alt="Capa"
                           className="size-full object-cover"
                           loading="lazy"
@@ -413,71 +413,80 @@ function PublicationsFlowPage() {
                       </div>
                     </div>
 
-                    {/* Post & Account Info */}
+                    {/* Account, Caption & Time */}
                     <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-bold text-xs text-foreground truncate">
-                            @{account?.username || "instagram"}
-                          </span>
-                          {post.is_trial && (
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-primary/15 text-primary">
-                              🧪 Teste
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-muted-foreground font-mono shrink-0">
-                          {formattedDate}
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-foreground">
+                          @{post.username}
+                        </span>
+                        {post.account_categories && (
+                          <span
+                            className="size-2 rounded-full ring-1 ring-background"
+                            style={{ backgroundColor: post.account_categories.color }}
+                            title={post.account_categories.name}
+                          />
+                        )}
+                        <span className="text-[11px] text-muted-foreground">
+                          • {formattedDate}
                         </span>
                       </div>
 
                       <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                        {post.caption || "Sem legenda"}
+                        {post.caption || "Sem legenda cadastrada"}
                       </p>
                     </div>
                   </div>
 
-                  {/* Performance Metrics Bar */}
-                  <div className="grid grid-cols-4 gap-2 pt-3 border-t border-border/30">
+                  {/* Right: Metrics Badges & External Link */}
+                  <div className="flex items-center gap-2.5 flex-wrap shrink-0">
                     {/* Views */}
-                    <div className="rounded-xl bg-background/60 p-2 text-center border border-border/30">
-                      <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground font-bold">
-                        <Eye className="size-3 text-primary" /> Views
-                      </div>
-                      <div className="text-xs font-extrabold text-foreground mt-0.5">
+                    <div className="px-3 py-1.5 rounded-xl bg-primary/10 text-primary border border-primary/20 flex items-center gap-1.5 shadow-sm">
+                      <Eye className="size-3.5" />
+                      <span className="text-xs font-extrabold">
                         {(post.views_count || 0).toLocaleString("pt-BR")}
-                      </div>
+                      </span>
+                      <span className="text-[10px] opacity-80">views</span>
                     </div>
 
                     {/* Reach */}
-                    <div className="rounded-xl bg-background/60 p-2 text-center border border-border/30">
-                      <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground font-bold">
-                        <Users className="size-3 text-purple-400" /> Alcance
-                      </div>
-                      <div className="text-xs font-extrabold text-foreground mt-0.5">
+                    <div className="px-3 py-1.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center gap-1.5 shadow-sm">
+                      <Users className="size-3.5" />
+                      <span className="text-xs font-extrabold">
                         {(post.reach_count || 0).toLocaleString("pt-BR")}
-                      </div>
+                      </span>
+                      <span className="text-[10px] opacity-80">alcance</span>
                     </div>
 
                     {/* Likes */}
-                    <div className="rounded-xl bg-background/60 p-2 text-center border border-border/30">
-                      <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground font-bold">
-                        <Heart className="size-3 text-pink-400" /> Curtidas
-                      </div>
-                      <div className="text-xs font-extrabold text-foreground mt-0.5">
+                    <div className="px-3 py-1.5 rounded-xl bg-pink-500/10 text-pink-400 border border-pink-500/20 flex items-center gap-1.5 shadow-sm">
+                      <Heart className="size-3.5" />
+                      <span className="text-xs font-extrabold">
                         {(post.likes_count || 0).toLocaleString("pt-BR")}
-                      </div>
+                      </span>
+                      <span className="text-[10px] opacity-80">likes</span>
                     </div>
 
                     {/* Comments */}
-                    <div className="rounded-xl bg-background/60 p-2 text-center border border-border/30">
-                      <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground font-bold">
-                        <MessageCircle className="size-3 text-emerald-400" /> Coments
-                      </div>
-                      <div className="text-xs font-extrabold text-foreground mt-0.5">
+                    <div className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 shadow-sm">
+                      <MessageCircle className="size-3.5" />
+                      <span className="text-xs font-extrabold">
                         {(post.comments_count || 0).toLocaleString("pt-BR")}
-                      </div>
+                      </span>
                     </div>
+
+                    {/* Instagram Link */}
+                    {post.permalink && (
+                      <a
+                        href={post.permalink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-secondary/80 hover:bg-secondary text-xs font-semibold text-foreground border border-border/40 transition cursor-pointer"
+                        title="Abrir no Instagram"
+                      >
+                        <Instagram className="size-3.5 text-pink-400" />
+                        <ExternalLink className="size-3 opacity-60" />
+                      </a>
+                    )}
                   </div>
                 </div>
               );
@@ -487,63 +496,65 @@ function PublicationsFlowPage() {
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════ */}
-      {/* 4. Section: Próximos 10 Reels Agendados (Fila de Disparo) */}
+      {/* 4. SECTION 2: PRÓXIMOS 10 REELS AGENDADOS (FILA DE DISPARO) */}
       {/* ═════════════════════════════════════════════════════════════════ */}
-      <div className="rounded-2xl border border-border/60 bg-card/40 backdrop-blur-sm p-6 shadow-card space-y-5">
+      <div className="rounded-2xl border border-border/60 bg-card/40 backdrop-blur-sm p-6 shadow-card space-y-6">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="size-9 rounded-xl bg-primary/10 text-primary grid place-items-center">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-primary/10 text-primary grid place-items-center shadow-glow">
               <Clock className="size-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-foreground">
+              <h2 className="text-lg font-bold text-foreground">
                 Próximos 10 Reels Agendados na Fila
               </h2>
               <p className="text-xs text-muted-foreground">
-                Cronograma em ordem cronológica dos próximos disparos automáticos.
+                Cronograma ordenado dos próximos disparos automáticos programados.
               </p>
             </div>
           </div>
 
-          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-primary/10 text-primary border border-primary/20">
+          <span className="px-3 py-1 rounded-xl text-xs font-bold bg-primary/10 text-primary border border-primary/20">
             {filteredUpcoming.length} de {totalPendingCount} na fila
           </span>
         </div>
 
         {filteredUpcoming.length === 0 ? (
-          <div className="p-10 text-center text-xs text-muted-foreground space-y-2">
+          <div className="p-12 text-center text-xs text-muted-foreground space-y-3">
             <Clock className="size-8 mx-auto opacity-40 text-muted-foreground" />
             <p>Nenhum Reel agendado na fila no momento.</p>
             <Link to="/schedule">
               <Button size="sm" className="bg-gradient-brand text-primary-foreground border-0 mt-2">
-                Agendar Agora
+                Agendar Novo Reel
               </Button>
             </Link>
           </div>
         ) : (
-          <div className="divide-y divide-border/30 overflow-x-auto">
+          <div className="divide-y divide-border/30">
             {filteredUpcoming.map((post, idx) => {
               const account = post.instagram_accounts;
               const formattedDate = new Date(post.scheduled_at).toLocaleString("pt-BR", {
-                dateStyle: "short",
-                timeStyle: "short",
+                day: "2-digit",
+                month: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
               });
 
               return (
                 <div
                   key={post.id}
-                  className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-secondary/15 px-2 rounded-xl transition"
+                  className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-secondary/15 px-3 rounded-2xl transition"
                 >
                   {/* Left: Position, Thumb & Info */}
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-mono font-bold text-muted-foreground w-6 text-center">
+                  <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                    <span className="text-xs font-mono font-bold text-muted-foreground w-6 text-center shrink-0">
                       #{idx + 1}
                     </span>
 
                     {/* Thumbnail */}
                     <div
                       onClick={() => post.video_url && setPreviewVideoUrl(post.video_url)}
-                      className="size-11 rounded-lg bg-background overflow-hidden shrink-0 cursor-pointer group ring-1 ring-border/50 relative"
+                      className="size-12 rounded-xl bg-background overflow-hidden shrink-0 cursor-pointer group ring-1 ring-border/50 relative shadow-sm"
                       title="Clique para ver preview"
                     >
                       {post.cover_url ? (
@@ -559,14 +570,14 @@ function PublicationsFlowPage() {
                         </div>
                       )}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity grid place-items-center">
-                        <Play className="size-3 text-white fill-white" />
+                        <Play className="size-3.5 text-white fill-white" />
                       </div>
                     </div>
 
                     {/* Account & Caption */}
-                    <div className="min-w-0 space-y-0.5">
+                    <div className="min-w-0 flex-1 space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-xs text-foreground truncate">
+                        <span className="font-bold text-xs text-foreground">
                           @{account?.username || "instagram"}
                         </span>
                         {post.is_trial && (
@@ -582,7 +593,7 @@ function PublicationsFlowPage() {
                           />
                         )}
                       </div>
-                      <p className="text-[11px] text-muted-foreground truncate max-w-sm">
+                      <p className="text-xs text-muted-foreground truncate max-w-lg">
                         {post.caption || "Sem legenda"}
                       </p>
                     </div>
@@ -594,7 +605,7 @@ function PublicationsFlowPage() {
                       <div className="text-xs font-bold text-foreground">{formattedDate}</div>
                       <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-primary">
                         <span className="size-1.5 rounded-full bg-primary animate-pulse" />
-                        Aguardando disparo
+                        Na fila de disparo
                       </span>
                     </div>
 

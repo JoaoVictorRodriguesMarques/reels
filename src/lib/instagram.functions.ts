@@ -345,3 +345,91 @@ export const getAvailableMetaAppIds = createServerFn({ method: "GET" })
       greg: gregAppId,
     };
   });
+
+export const getPublishedReelsWithPerformance = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) =>
+    z
+      .object({
+        accountId: z.string().optional(),
+        limit: z.number().default(10),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+
+    let query = supabase
+      .from("instagram_accounts")
+      .select("id, username, access_token, profile_picture_url, account_categories(id, name, color)")
+      .eq("user_id", userId)
+      .eq("hidden", false)
+      .not("access_token", "is", null);
+
+    if (data.accountId && data.accountId !== "all") {
+      query = query.eq("id", data.accountId);
+    }
+
+    const { data: accounts, error: accErr } = await query;
+    if (accErr) throw accErr;
+    if (!accounts || accounts.length === 0) return [];
+
+    const allPublished: any[] = [];
+
+    // Fetch media from each account
+    await Promise.all(
+      accounts.map(async (acc) => {
+        if (!acc.access_token) return;
+        try {
+          const url = `https://graph.instagram.com/v21.0/me/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count&limit=10&access_token=${acc.access_token}`;
+          const res = await fetch(url);
+          if (!res.ok) return;
+
+          const resData = await res.json();
+          const mediaList = resData.data || [];
+
+          for (const m of mediaList) {
+            let views = 0;
+            let reach = 0;
+
+            try {
+              const insRes = await fetch(
+                `https://graph.instagram.com/v21.0/${m.id}/insights?metric=views,reach,total_interactions&access_token=${acc.access_token}`,
+              );
+              if (insRes.ok) {
+                const insData = await insRes.json();
+                for (const row of insData.data || []) {
+                  if (row.name === "views") views = row.values?.[0]?.value || 0;
+                  if (row.name === "reach") reach = row.values?.[0]?.value || 0;
+                }
+              }
+            } catch (_) {}
+
+            allPublished.push({
+              id: m.id,
+              instagram_account_id: acc.id,
+              username: acc.username,
+              profile_picture_url: acc.profile_picture_url,
+              account_categories: (acc as any).account_categories,
+              caption: m.caption || "",
+              media_url: m.media_url,
+              thumbnail_url: m.thumbnail_url || m.media_url,
+              permalink: m.permalink,
+              timestamp: m.timestamp,
+              likes_count: m.like_count || 0,
+              comments_count: m.comments_count || 0,
+              views_count: views,
+              reach_count: reach,
+            });
+          }
+        } catch (_) {}
+      }),
+    );
+
+    // Sort by publication date descending
+    allPublished.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+
+    return allPublished.slice(0, data.limit);
+  });
