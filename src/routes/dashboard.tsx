@@ -141,24 +141,36 @@ function DashboardPage() {
   async function loadPostsData(accountIds: string[]) {
     setLoading(true);
     try {
-      // 1. Fetch pending posts and group by instagram_account_id
-      const { data: pendingPosts, error: pendingErr } = await supabase
-        .from("scheduled_posts")
-        .select("instagram_account_id")
-        .eq("status", "pending");
-
-      if (pendingErr) throw pendingErr;
+      // 1. Fetch pending posts counts per account (Instant aggregation without 1000-row cutoff)
+      const { data: rpcData, error: rpcErr } = await supabase.rpc("get_account_scheduled_counts" as any);
 
       const countsMap: Record<string, number> = {};
       let totalAllPending = 0;
-      if (pendingPosts) {
-        totalAllPending = pendingPosts.length;
-        pendingPosts.forEach((p) => {
-          if (p.instagram_account_id) {
-            countsMap[p.instagram_account_id] = (countsMap[p.instagram_account_id] || 0) + 1;
-          }
+
+      if (!rpcErr && rpcData && Array.isArray(rpcData)) {
+        rpcData.forEach((row: any) => {
+          const c = Number(row.pending_count || 0);
+          countsMap[row.instagram_account_id] = c;
+          totalAllPending += c;
         });
+      } else {
+        // Direct query fallback with large limit to bypass default 1000-row PostgREST limit
+        const { data: pendingPosts } = await supabase
+          .from("scheduled_posts")
+          .select("instagram_account_id")
+          .eq("status", "pending")
+          .limit(50000);
+
+        if (pendingPosts) {
+          totalAllPending = pendingPosts.length;
+          pendingPosts.forEach((p) => {
+            if (p.instagram_account_id) {
+              countsMap[p.instagram_account_id] = (countsMap[p.instagram_account_id] || 0) + 1;
+            }
+          });
+        }
       }
+
       setScheduledPending(totalAllPending);
       setScheduledByAccount(countsMap);
 
