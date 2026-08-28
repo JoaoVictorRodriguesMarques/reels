@@ -94,6 +94,7 @@ function DashboardPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [scheduledPending, setScheduledPending] = useState(0);
+  const [scheduledByAccount, setScheduledByAccount] = useState<Record<string, number>>({});
   const [totalPublished, setTotalPublished] = useState(0);
   const [totalFailed, setTotalFailed] = useState(0);
   const [upcomingPosts, setUpcomingPosts] = useState<Post[]>([]);
@@ -103,7 +104,7 @@ function DashboardPage() {
 
   // Sorting & Filtering State for the Leaderboard
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"views" | "reach" | "followers" | "engagement" | "health">("views");
+  const [sortBy, setSortBy] = useState<"views" | "scheduled" | "reach" | "followers" | "engagement" | "health">("views");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   const navigate = useNavigate();
@@ -140,17 +141,26 @@ function DashboardPage() {
   async function loadPostsData(accountIds: string[]) {
     setLoading(true);
     try {
-      // 1. Pending count
-      let pendingQuery = supabase
+      // 1. Fetch pending posts and group by instagram_account_id
+      const { data: pendingPosts, error: pendingErr } = await supabase
         .from("scheduled_posts")
-        .select("*", { count: "exact", head: true })
+        .select("instagram_account_id")
         .eq("status", "pending");
 
-      if (accountIds.length > 0) {
-        pendingQuery = pendingQuery.in("instagram_account_id", accountIds);
+      if (pendingErr) throw pendingErr;
+
+      const countsMap: Record<string, number> = {};
+      let totalAllPending = 0;
+      if (pendingPosts) {
+        totalAllPending = pendingPosts.length;
+        pendingPosts.forEach((p) => {
+          if (p.instagram_account_id) {
+            countsMap[p.instagram_account_id] = (countsMap[p.instagram_account_id] || 0) + 1;
+          }
+        });
       }
-      const { count: pendingCount } = await pendingQuery;
-      setScheduledPending(pendingCount || 0);
+      setScheduledPending(totalAllPending);
+      setScheduledByAccount(countsMap);
 
       // 2. Published count
       let publishedQuery = supabase
@@ -270,6 +280,7 @@ function DashboardPage() {
       })
       .sort((a, b) => {
         if (sortBy === "views") return (b.total_views || 0) - (a.total_views || 0);
+        if (sortBy === "scheduled") return (scheduledByAccount[b.id] || 0) - (scheduledByAccount[a.id] || 0);
         if (sortBy === "reach") return (b.total_reach || 0) - (a.total_reach || 0);
         if (sortBy === "followers") return (b.followers_count || 0) - (a.followers_count || 0);
         if (sortBy === "engagement") return Number(b.engagement_rate || 0) - Number(a.engagement_rate || 0);
@@ -279,7 +290,7 @@ function DashboardPage() {
         }
         return 0;
       });
-  }, [accounts, searchQuery, sortBy, categoryFilter]);
+  }, [accounts, searchQuery, sortBy, categoryFilter, scheduledByAccount]);
 
   // Unique categories for filter
   const categories = useMemo(() => {
@@ -404,7 +415,7 @@ function DashboardPage() {
       {/* ═════════════════════════════════════════════════════════════════ */}
       {/* 3. Global KPI Cards (Summary) */}
       {/* ═════════════════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Total Views */}
         <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
           <div className="flex items-center justify-between">
@@ -418,7 +429,25 @@ function DashboardPage() {
               {totalViewsSum.toLocaleString("pt-BR")}
             </div>
             <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
-              <TrendingUp className="size-3 text-emerald-400" /> Soma de todas as contas
+              <TrendingUp className="size-3 text-emerald-400" /> Todas as contas
+            </span>
+          </div>
+        </div>
+
+        {/* Total Scheduled Reels */}
+        <div className="rounded-2xl border border-primary/30 bg-primary/[0.04] p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-primary">Reels Agendados</span>
+            <div className="size-8 rounded-xl bg-primary/15 text-primary grid place-items-center shadow-glow">
+              <CalendarIcon className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-primary">
+              {scheduledPending.toLocaleString("pt-BR")}
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              <Clock className="size-3 text-primary" /> Total na fila de disparo
             </span>
           </div>
         </div>
@@ -436,25 +465,7 @@ function DashboardPage() {
               {totalReachSum.toLocaleString("pt-BR")}
             </div>
             <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
-              Contas únicas impactadas
-            </span>
-          </div>
-        </div>
-
-        {/* Avg Engagement */}
-        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted-foreground">Engajamento Médio</span>
-            <div className="size-8 rounded-xl bg-pink-500/10 text-pink-400 grid place-items-center">
-              <Heart className="size-4" />
-            </div>
-          </div>
-          <div>
-            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
-              {avgEngagementRate}%
-            </div>
-            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
-              Curtidas, comentários e salvamentos
+              Contas únicas alcançadas
             </span>
           </div>
         </div>
@@ -472,7 +483,25 @@ function DashboardPage() {
               {totalFollowersSum.toLocaleString("pt-BR")}
             </div>
             <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
-              Em {accounts.length} contas gerenciadas
+              Em {accounts.length} contas
+            </span>
+          </div>
+        </div>
+
+        {/* Avg Engagement */}
+        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3 col-span-2 sm:col-span-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Engajamento Médio</span>
+            <div className="size-8 rounded-xl bg-pink-500/10 text-pink-400 grid place-items-center">
+              <Heart className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              {avgEngagementRate}%
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              Interações / seguidores
             </span>
           </div>
         </div>
@@ -538,6 +567,7 @@ function DashboardPage() {
               </SelectTrigger>
               <SelectContent className="bg-popover border-border/60">
                 <SelectItem value="views">🥇 Mais Visualizações</SelectItem>
+                <SelectItem value="scheduled">📅 Mais Agendados</SelectItem>
                 <SelectItem value="reach">👥 Maior Alcance</SelectItem>
                 <SelectItem value="followers">📈 Mais Seguidores</SelectItem>
                 <SelectItem value="engagement">💬 Maior Engajamento</SelectItem>
@@ -570,6 +600,7 @@ function DashboardPage() {
             {filteredAndSortedAccounts.map((acc, index) => {
               const viewsPercentage = totalViewsSum > 0 ? ((acc.total_views || 0) / totalViewsSum) * 100 : 0;
               const isChampion = index === 0 && (acc.total_views || 0) > 0;
+              const accountPendingCount = scheduledByAccount[acc.id] || 0;
 
               return (
                 <div
@@ -665,7 +696,7 @@ function DashboardPage() {
                   </div>
 
                   {/* Middle / Right: Metrics Comparison */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1 max-w-2xl">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5 flex-1 max-w-3xl">
                     {/* Views & Progress Bar */}
                     <div className="space-y-1.5">
                       <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
@@ -680,6 +711,26 @@ function DashboardPage() {
                           style={{ width: `${Math.max(viewsPercentage, 4)}%` }}
                         />
                       </div>
+                    </div>
+
+                    {/* Scheduled Reels in this Account */}
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-primary">
+                        Agendados
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-extrabold text-primary">
+                          {accountPendingCount.toLocaleString("pt-BR")}
+                        </span>
+                        {accountPendingCount > 0 ? (
+                          <span className="px-1.5 py-0.2 rounded-md text-[9px] font-bold bg-primary/15 text-primary border border-primary/20">
+                            Fila
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">
+                        {accountPendingCount === 1 ? "1 reel pendente" : `${accountPendingCount} reels na fila`}
+                      </span>
                     </div>
 
                     {/* Reach */}
