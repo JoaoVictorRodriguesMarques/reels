@@ -769,12 +769,19 @@ function DashboardPage() {
                   className="rounded-xl border border-border/40 bg-secondary/20 p-2.5 flex flex-col justify-between space-y-2 hover:border-primary/30 transition"
                 >
                   <div className="flex gap-2 items-start">
-                    {reel.video_url ? (
+                    {reel.cover_url ? (
+                      <img
+                        src={reel.cover_url}
+                        alt="Capa"
+                        className="size-12 rounded-lg object-cover bg-background shrink-0"
+                        loading="lazy"
+                      />
+                    ) : reel.video_url ? (
                       <video
                         src={reel.video_url}
                         className="size-12 rounded-lg object-cover bg-background shrink-0"
                         muted
-                        preload="metadata"
+                        preload="none"
                       />
                     ) : (
                       <div className="size-12 rounded-lg bg-secondary grid place-items-center shrink-0">
@@ -828,12 +835,19 @@ function DashboardPage() {
                   className="rounded-xl border border-border/40 bg-secondary/20 p-3 flex items-center justify-between gap-3 hover:border-primary/30 transition"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    {post.video_url ? (
+                    {post.cover_url ? (
+                      <img
+                        src={post.cover_url}
+                        alt="Capa"
+                        className="size-9 rounded-lg object-cover bg-background shrink-0"
+                        loading="lazy"
+                      />
+                    ) : post.video_url ? (
                       <video
                         src={post.video_url}
                         className="size-9 rounded-lg object-cover bg-background shrink-0"
                         muted
-                        preload="metadata"
+                        preload="none"
                       />
                     ) : (
                       <div className="size-9 rounded-lg bg-secondary grid place-items-center shrink-0">

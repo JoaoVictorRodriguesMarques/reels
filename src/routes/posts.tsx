@@ -448,12 +448,19 @@ function PostsPage() {
                   key={p.id}
                   className="rounded-2xl border border-border/60 bg-card p-4 flex gap-4 shadow-card"
                 >
-                  {p.video_url ? (
+                  {p.cover_url ? (
+                    <img
+                      src={p.cover_url}
+                      alt="Capa"
+                      className="size-24 rounded-xl object-cover bg-background shrink-0"
+                      loading="lazy"
+                    />
+                  ) : p.video_url ? (
                     <video
                       src={p.video_url}
                       className="size-24 rounded-xl object-cover bg-background shrink-0"
                       muted
-                      preload="metadata"
+                      preload="none"
                     />
                   ) : (
                     <div

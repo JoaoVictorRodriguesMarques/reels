@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -170,59 +170,41 @@ function CalendarPage() {
     }
   }
 
-  // Load Posts for the currently visible month
+  // Load Posts for the currently visible month (Fast Single Query)
   async function loadPosts() {
+    if (selectedAccountIds.length === 0) {
+      setPosts([]);
+      return;
+    }
     setLoading(true);
     try {
       const year = currentMonth.getFullYear();
       const month = currentMonth.getMonth();
 
-      // Calculate a range that safely covers all days shown on a monthly calendar grid (including leading/trailing days)
-      const startOfMonth = new Date(year, month - 1, 20).toISOString();
-      const endOfMonth = new Date(year, month + 1, 10).toISOString();
+      // Safely covers previous, current and next month view on 7x6 calendar grid
+      const startOfMonth = new Date(year, month - 1, 1).toISOString();
+      const endOfMonth = new Date(year, month + 2, 0, 23, 59, 59).toISOString();
 
-      let allPosts: any[] = [];
-      let page = 0;
-      const pageSize = 1000;
-      let hasMore = true;
+      let query = supabase
+        .from("scheduled_posts")
+        .select(
+          "id, caption, video_url, cover_url, scheduled_at, status, is_trial, instagram_account_id, instagram_accounts(username, category_id, account_categories(id, name, color))",
+        )
+        .gte("scheduled_at", startOfMonth)
+        .lte("scheduled_at", endOfMonth)
+        .order("scheduled_at", { ascending: true })
+        .limit(1000);
 
-      while (hasMore) {
-        let query = supabase
-          .from("scheduled_posts")
-          .select(
-            "id, caption, video_url, cover_url, scheduled_at, status, is_trial, instagram_account_id, instagram_accounts(username, category_id, account_categories(id, name, color))",
-          )
-          .gte("scheduled_at", startOfMonth)
-          .lte("scheduled_at", endOfMonth)
-          .order("scheduled_at", { ascending: true })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (selectedAccountIds.length > 0) {
-          query = query.in("instagram_account_id", selectedAccountIds);
-        }
-
-        const { data: postsData, error } = await query;
-        if (error) throw error;
-
-        if (postsData && postsData.length > 0) {
-          allPosts = [...allPosts, ...postsData];
-          if (postsData.length < pageSize) {
-            hasMore = false;
-          } else {
-            page++;
-          }
-        } else {
-          hasMore = false;
-        }
-
-        // Safety limit to prevent infinite loop (caps at 10k posts)
-        if (page >= 10) {
-          hasMore = false;
-        }
+      if (selectedAccountIds.length > 0) {
+        query = query.in("instagram_account_id", selectedAccountIds);
       }
 
-      setPosts(allPosts);
+      const { data: postsData, error } = await query;
+      if (error) throw error;
+
+      setPosts((postsData as any) || []);
     } catch (err: any) {
+      console.error("Calendar load error:", err);
       toast.error(err.message || "Erro ao carregar posts do calendário");
     } finally {
       setLoading(false);
@@ -244,7 +226,7 @@ function CalendarPage() {
     if (accounts.length > 0) {
       loadPosts();
     }
-  }, [accounts, currentMonth, selectedAccountIds]);
+  }, [currentMonth, selectedAccountIds]);
 
   // Cleanup object URL
   useEffect(() => {
@@ -470,91 +452,86 @@ function CalendarPage() {
     }
   };
 
+  // Fast O(1) post lookup by YYYY-MM-DD
+  const postsByDateMap = useMemo(() => {
+    const map = new Map<string, Post[]>();
+    posts.forEach((p) => {
+      if (!p.scheduled_at) return;
+      const d = new Date(p.scheduled_at);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key)!.push(p);
+    });
+    return map;
+  }, [posts]);
+
   // Calendar Math Helpers
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
 
-  const firstDayOfWeek = new Date(year, month, 1).getDay(); // Sunday=0, Monday=1 etc.
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const prevMonthDays = new Date(year, month, 0).getDate();
+  const allCalendarDays = useMemo(() => {
+    const y = currentMonth.getFullYear();
+    const m = currentMonth.getMonth();
 
-  // Pad previous month days (adjusting Sunday start)
-  const prevMonthPadding = Array.from({ length: firstDayOfWeek }, (_, i) => {
-    const day = prevMonthDays - firstDayOfWeek + i + 1;
-    return {
-      day,
-      isCurrentMonth: false,
-      date: new Date(year, month - 1, day),
-    };
-  });
+    const firstDayOfWeek = new Date(y, m, 1).getDay(); // Sunday=0, Monday=1 etc.
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const prevMonthDays = new Date(y, m, 0).getDate();
 
-  // Current month days
-  const currentMonthDays = Array.from({ length: daysInMonth }, (_, i) => {
-    const day = i + 1;
-    return {
-      day,
-      isCurrentMonth: true,
-      date: new Date(year, month, day),
-    };
-  });
+    const formatDateKey = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-  // Pad next month days to align grid (7 cols)
-  const totalSlots = prevMonthPadding.length + currentMonthDays.length;
-  const remainingSlots = (7 - (totalSlots % 7)) % 7;
-  const nextMonthPadding = Array.from({ length: remainingSlots }, (_, i) => {
-    const day = i + 1;
-    return {
-      day,
-      isCurrentMonth: false,
-      date: new Date(year, month + 1, day),
-    };
-  });
+    // Pad previous month days (adjusting Sunday start)
+    const prevMonthPadding = Array.from({ length: firstDayOfWeek }, (_, i) => {
+      const day = prevMonthDays - firstDayOfWeek + i + 1;
+      const date = new Date(y, m - 1, day);
+      return {
+        day,
+        isCurrentMonth: false,
+        date,
+        dateKey: formatDateKey(date),
+      };
+    });
 
-  const allCalendarDays = [...prevMonthPadding, ...currentMonthDays, ...nextMonthPadding];
+    // Current month days
+    const currentMonthDays = Array.from({ length: daysInMonth }, (_, i) => {
+      const day = i + 1;
+      const date = new Date(y, m, day);
+      return {
+        day,
+        isCurrentMonth: true,
+        date,
+        dateKey: formatDateKey(date),
+      };
+    });
 
-  const navigateMonth = (direction: "prev" | "next") => {
-    const newMonth = new Date(currentMonth);
-    if (direction === "prev") {
-      newMonth.setMonth(currentMonth.getMonth() - 1);
-    } else {
-      newMonth.setMonth(currentMonth.getMonth() + 1);
-    }
-    setCurrentMonth(newMonth);
-  };
+    // Pad next month days to align grid (7 cols)
+    const totalSlots = prevMonthPadding.length + currentMonthDays.length;
+    const remainingSlots = (7 - (totalSlots % 7)) % 7;
+    const nextMonthPadding = Array.from({ length: remainingSlots }, (_, i) => {
+      const day = i + 1;
+      const date = new Date(y, m + 1, day);
+      return {
+        day,
+        isCurrentMonth: false,
+        date,
+        dateKey: formatDateKey(date),
+      };
+    });
 
-  // Month names
-  const monthNames = [
-    "Janeiro",
-    "Fevereiro",
-    "Março",
-    "Abril",
-    "Maio",
-    "Junho",
-    "Julho",
-    "Agosto",
-    "Setembro",
-    "Outubro",
-    "Novembro",
-    "Dezembro",
-  ];
+    return [...prevMonthPadding, ...currentMonthDays, ...nextMonthPadding];
+  }, [currentMonth]);
 
-  const dayOfWeekNames = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  const selectedDateKey = useMemo(() => {
+    const d = selectedDate;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, [selectedDate]);
 
-  // Utility to check date equality
-  const isSameDay = (d1: Date, d2: Date) => {
-    return (
-      d1.getFullYear() === d2.getFullYear() &&
-      d1.getMonth() === d2.getMonth() &&
-      d1.getDate() === d2.getDate()
-    );
-  };
-
-  // Filter posts for selected day and selected accounts
-  const postsOnSelectedDay = posts.filter(
-    (p) =>
-      isSameDay(new Date(p.scheduled_at), selectedDate) &&
-      selectedAccountIds.includes(p.instagram_account_id),
-  );
+  // Filter posts for selected day (O(1) instant lookup)
+  const postsOnSelectedDay = useMemo(() => {
+    return postsByDateMap.get(selectedDateKey) || [];
+  }, [postsByDateMap, selectedDateKey]);
 
   // Minimum date-time for scheduling picker
   const tzOffset = new Date().getTimezoneOffset() * 60_000;
@@ -728,13 +705,9 @@ function CalendarPage() {
             {/* Dias do calendário */}
             <div className="grid grid-cols-7 gap-2">
               {allCalendarDays.map((cell, idx) => {
-                const dayPosts = posts.filter(
-                  (p) =>
-                    isSameDay(new Date(p.scheduled_at), cell.date) &&
-                    selectedAccountIds.includes(p.instagram_account_id),
-                );
-                const isSelected = isSameDay(cell.date, selectedDate);
-                const isTodayDate = isSameDay(cell.date, new Date());
+                const dayPosts = postsByDateMap.get(cell.dateKey) || [];
+                const isSelected = cell.dateKey === selectedDateKey;
+                const isTodayDate = cell.dateKey === new Date().toISOString().split("T")[0];
 
                 return (
                   <button
@@ -877,12 +850,19 @@ function CalendarPage() {
                       />
 
                       <div className="p-4 rounded-2xl bg-card border border-border/50 hover:border-primary/20 hover:bg-card/75 transition-all shadow-sm flex gap-4 relative">
-                        {post.video_url ? (
+                        {post.cover_url ? (
+                          <img
+                            src={post.cover_url}
+                            alt="Capa"
+                            className="w-16 h-20 rounded-xl object-cover bg-background shrink-0 shadow-inner"
+                            loading="lazy"
+                          />
+                        ) : post.video_url ? (
                           <video
                             src={post.video_url}
                             className="w-16 h-20 rounded-xl object-cover bg-background shrink-0 shadow-inner"
                             muted
-                            preload="metadata"
+                            preload="none"
                           />
                         ) : (
                           <div
