@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Instagram,
   Plus,
@@ -10,8 +10,21 @@ import {
   ChevronDown,
   Clock,
   AlertCircle,
+  AlertTriangle,
   ArrowUpRight,
   Sparkles,
+  RefreshCw,
+  Eye,
+  Users,
+  Heart,
+  TrendingUp,
+  ShieldCheck,
+  ShieldAlert,
+  Search,
+  ArrowUpDown,
+  Trophy,
+  Award,
+  Video,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -25,8 +38,6 @@ import {
 } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Calendar } from "@/components/ui/calendar";
-import { DateRange } from "react-day-picker";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -37,7 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 export const Route = createFileRoute("/dashboard")({
-  head: () => ({ meta: [{ title: "Painel de Controle — Reelary" }] }),
+  head: () => ({ meta: [{ title: "Painel de Performance & Saúde — Reelary" }] }),
   component: () => (
     <AppShell>
       <DashboardPage />
@@ -49,6 +60,18 @@ interface Account {
   id: string;
   username: string;
   category_id: string | null;
+  followers_count: number;
+  media_count: number;
+  total_views: number;
+  total_reach: number;
+  total_likes: number;
+  total_comments: number;
+  engagement_rate: number;
+  profile_picture_url: string | null;
+  health_status: string;
+  health_reason: string | null;
+  last_health_check_at: string | null;
+  metrics_updated_at: string | null;
   account_categories: { id: string; name: string; color: string } | null;
 }
 
@@ -59,6 +82,10 @@ interface Post {
   cover_url: string | null;
   scheduled_at: string;
   status: "pending" | "published" | "failed";
+  views_count?: number;
+  likes_count?: number;
+  reach_count?: number;
+  is_trial?: boolean;
   instagram_account_id: string;
   instagram_accounts: { username: string } | null;
 }
@@ -70,30 +97,38 @@ function DashboardPage() {
   const [totalPublished, setTotalPublished] = useState(0);
   const [totalFailed, setTotalFailed] = useState(0);
   const [upcomingPosts, setUpcomingPosts] = useState<Post[]>([]);
+  const [topReels, setTopReels] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState<string>("all");
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [syncing, setSyncing] = useState(false);
+
+  // Sorting & Filtering State for the Leaderboard
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"views" | "reach" | "followers" | "engagement" | "health">("views");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+
   const navigate = useNavigate();
 
+  // 1. Load All Accounts and Metrics from Supabase
   async function loadData() {
     try {
-      // 1. Fetch instagram accounts - only visible (non-hidden) ones!
       const { data: accs, error: accsErr } = await supabase
         .from("instagram_accounts")
-        .select("id, username, category_id, account_categories(id, name, color)")
+        .select(
+          "id, username, category_id, followers_count, media_count, total_views, total_reach, total_likes, total_comments, engagement_rate, profile_picture_url, health_status, health_reason, last_health_check_at, metrics_updated_at, account_categories(id, name, color)",
+        )
         .eq("hidden", false)
         .order("created_at", { ascending: false });
+
       if (accsErr) throw accsErr;
 
-      const loadedAccounts = accs || [];
+      const loadedAccounts = (accs as any) || [];
       setAccounts(loadedAccounts);
 
-      // Pre-fill selectedAccountIds with loaded visible accounts on first load
       setSelectedAccountIds((prev) => {
         if (prev.length === 0) {
-          return loadedAccounts.map((a) => a.id);
+          return loadedAccounts.map((a: Account) => a.id);
         }
-        return prev.filter((id) => loadedAccounts.some((a) => a.id === id));
+        return prev.filter((id) => loadedAccounts.some((a: Account) => a.id === id));
       });
     } catch (err: any) {
       console.error("Dashboard error:", err);
@@ -101,17 +136,11 @@ function DashboardPage() {
     }
   }
 
-  async function loadMetricsAndUpcoming(
-    accountIds: string[],
-    filter: string,
-    range: DateRange | undefined,
-  ) {
+  // 2. Load Pending, Published, and Top Posts
+  async function loadPostsData(accountIds: string[]) {
     setLoading(true);
     try {
-      const nowStr = new Date().toISOString();
-      const { start: filterStart, end: filterEnd } = getFilterDateRange();
-
-      // 1. Pending count query
+      // 1. Pending count
       let pendingQuery = supabase
         .from("scheduled_posts")
         .select("*", { count: "exact", head: true })
@@ -120,17 +149,10 @@ function DashboardPage() {
       if (accountIds.length > 0) {
         pendingQuery = pendingQuery.in("instagram_account_id", accountIds);
       }
-      if (filterStart) {
-        pendingQuery = pendingQuery.gte("scheduled_at", filterStart.toISOString());
-      }
-      if (filterEnd) {
-        pendingQuery = pendingQuery.lte("scheduled_at", filterEnd.toISOString());
-      }
-      const { count: pendingCount, error: pendingErr } = await pendingQuery;
-      if (pendingErr) throw pendingErr;
+      const { count: pendingCount } = await pendingQuery;
       setScheduledPending(pendingCount || 0);
 
-      // 2. Published count query
+      // 2. Published count
       let publishedQuery = supabase
         .from("scheduled_posts")
         .select("*", { count: "exact", head: true })
@@ -139,17 +161,10 @@ function DashboardPage() {
       if (accountIds.length > 0) {
         publishedQuery = publishedQuery.in("instagram_account_id", accountIds);
       }
-      if (filterStart) {
-        publishedQuery = publishedQuery.gte("scheduled_at", filterStart.toISOString());
-      }
-      if (filterEnd) {
-        publishedQuery = publishedQuery.lte("scheduled_at", filterEnd.toISOString());
-      }
-      const { count: publishedCount, error: publishedErr } = await publishedQuery;
-      if (publishedErr) throw publishedErr;
+      const { count: publishedCount } = await publishedQuery;
       setTotalPublished(publishedCount || 0);
 
-      // 3. Failed count query
+      // 3. Failed count
       let failedQuery = supabase
         .from("scheduled_posts")
         .select("*", { count: "exact", head: true })
@@ -158,500 +173,702 @@ function DashboardPage() {
       if (accountIds.length > 0) {
         failedQuery = failedQuery.in("instagram_account_id", accountIds);
       }
-      if (filterStart) {
-        failedQuery = failedQuery.gte("scheduled_at", filterStart.toISOString());
-      }
-      if (filterEnd) {
-        failedQuery = failedQuery.lte("scheduled_at", filterEnd.toISOString());
-      }
-      const { count: failedCount, error: failedErr } = await failedQuery;
-      if (failedErr) throw failedErr;
+      const { count: failedCount } = await failedQuery;
       setTotalFailed(failedCount || 0);
 
-      // 4. Upcoming posts query
+      // 4. Upcoming Posts
+      const nowStr = new Date().toISOString();
       let upcomingQuery = supabase
         .from("scheduled_posts")
-        .select(
-          "id, caption, video_url, cover_url, scheduled_at, status, instagram_account_id, instagram_accounts(username)",
-        )
+        .select("id, caption, video_url, cover_url, scheduled_at, status, is_trial, instagram_account_id, instagram_accounts(username)")
         .eq("status", "pending")
-        .gt("scheduled_at", nowStr)
+        .gte("scheduled_at", nowStr)
         .order("scheduled_at", { ascending: true })
-        .limit(3);
+        .limit(5);
 
       if (accountIds.length > 0) {
         upcomingQuery = upcomingQuery.in("instagram_account_id", accountIds);
       }
-      const { data: upcomingData, error: upcomingErr } = await upcomingQuery;
-      if (upcomingErr) throw upcomingErr;
+      const { data: upcomingData } = await upcomingQuery;
       setUpcomingPosts((upcomingData as any) || []);
-    } catch (err: any) {
-      console.error("Metrics load error:", err);
-      toast.error("Erro ao atualizar métricas do painel");
+
+      // 5. Top Published Reels
+      let topQuery = supabase
+        .from("scheduled_posts")
+        .select("id, caption, video_url, cover_url, scheduled_at, status, views_count, likes_count, reach_count, is_trial, instagram_account_id, instagram_accounts(username)")
+        .eq("status", "published")
+        .order("views_count", { ascending: false })
+        .limit(4);
+
+      if (accountIds.length > 0) {
+        topQuery = topQuery.in("instagram_account_id", accountIds);
+      }
+      const { data: topData } = await topQuery;
+      setTopReels((topData as any) || []);
+    } catch (err) {
+      console.error("Error loading posts metrics:", err);
     } finally {
       setLoading(false);
     }
   }
 
+  // 3. Trigger Live Insights & Health Sync
+  async function handleSyncInsights() {
+    setSyncing(true);
+    toast.info("Consultando Meta Graph API para sincronizar métricas e diagnóstico...");
+    try {
+      const { data, error } = await supabase.functions.invoke("sync-insights");
+      if (error) throw error;
+
+      toast.success(
+        `Sincronização concluída! ${data?.accounts_synced || accounts.length} contas atualizadas.`,
+      );
+      await loadData();
+    } catch (err: any) {
+      console.error("Error syncing insights:", err);
+      toast.error(err.message || "Erro ao sincronizar dados com o Instagram.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   useEffect(() => {
     loadData();
-
-    // Listen to changes (e.g. if account is added/removed)
-    const handleSync = () => {
-      loadData();
-    };
-    window.addEventListener("active-account-changed", handleSync);
-    return () => window.removeEventListener("active-account-changed", handleSync);
   }, []);
 
   useEffect(() => {
     if (accounts.length > 0) {
-      loadMetricsAndUpcoming(selectedAccountIds, dateFilter, dateRange);
+      loadPostsData(selectedAccountIds);
+    } else {
+      setLoading(false);
     }
-  }, [accounts, selectedAccountIds, dateFilter, dateRange]);
+  }, [accounts, selectedAccountIds]);
 
-  // Compute date range for filtering
-  const getFilterDateRange = () => {
-    const now = new Date();
-    const start = new Date();
-    const end = new Date();
+  // Compute Aggregates
+  const totalViewsSum = useMemo(() => accounts.reduce((acc, a) => acc + (a.total_views || 0), 0), [accounts]);
+  const totalReachSum = useMemo(() => accounts.reduce((acc, a) => acc + (a.total_reach || 0), 0), [accounts]);
+  const totalFollowersSum = useMemo(() => accounts.reduce((acc, a) => acc + (a.followers_count || 0), 0), [accounts]);
+  const avgEngagementRate = useMemo(() => {
+    if (accounts.length === 0) return 0;
+    const sum = accounts.reduce((acc, a) => acc + Number(a.engagement_rate || 0), 0);
+    return Number((sum / accounts.length).toFixed(2));
+  }, [accounts]);
 
-    if (dateFilter === "today") {
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      return { start, end };
-    } else if (dateFilter === "yesterday") {
-      start.setDate(now.getDate() - 1);
-      start.setHours(0, 0, 0, 0);
-      end.setDate(now.getDate() - 1);
-      end.setHours(23, 59, 59, 999);
-      return { start, end };
-    } else if (dateFilter === "7d") {
-      start.setDate(now.getDate() - 7);
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      return { start, end };
-    } else if (dateFilter === "30d") {
-      start.setDate(now.getDate() - 30);
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      return { start, end };
-    } else if (dateFilter === "custom" && dateRange?.from) {
-      const s = new Date(dateRange.from);
-      s.setHours(0, 0, 0, 0);
-      const e = dateRange.to ? new Date(dateRange.to) : new Date(dateRange.from);
-      e.setHours(23, 59, 59, 999);
-      return { start: s, end: e };
-    }
-    return { start: null, end: null };
-  };
+  // Health Diagnostics
+  const restrictedAccounts = useMemo(() => accounts.filter((a) => a.health_status === "restricted"), [accounts]);
+  const expiredAccounts = useMemo(() => accounts.filter((a) => a.health_status === "token_expired"), [accounts]);
+  const healthyAccountsCount = useMemo(() => accounts.filter((a) => a.health_status === "healthy").length, [accounts]);
 
-  const totalAccounts = accounts.length;
+  // Filter and Sort ALL connected accounts
+  const filteredAndSortedAccounts = useMemo(() => {
+    return accounts
+      .filter((a) => {
+        const matchesSearch = a.username.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesCategory =
+          categoryFilter === "all" || a.category_id === categoryFilter;
+        return matchesSearch && matchesCategory;
+      })
+      .sort((a, b) => {
+        if (sortBy === "views") return (b.total_views || 0) - (a.total_views || 0);
+        if (sortBy === "reach") return (b.total_reach || 0) - (a.total_reach || 0);
+        if (sortBy === "followers") return (b.followers_count || 0) - (a.followers_count || 0);
+        if (sortBy === "engagement") return Number(b.engagement_rate || 0) - Number(a.engagement_rate || 0);
+        if (sortBy === "health") {
+          const score = (status: string) => (status === "restricted" ? 3 : status === "token_expired" ? 2 : 1);
+          return score(b.health_status) - score(a.health_status);
+        }
+        return 0;
+      });
+  }, [accounts, searchQuery, sortBy, categoryFilter]);
 
-  // Dynamic titles based on selected filter
-  const getScheduledCardTitle = () => {
-    if (dateFilter === "today") return "Reels Agendados (Hoje)";
-    if (dateFilter === "yesterday") return "Reels Agendados (Ontem)";
-    if (dateFilter === "7d") return "Reels Agendados (7d)";
-    if (dateFilter === "30d") return "Reels Agendados (30d)";
-    if (dateFilter === "custom") return "Reels Agendados (Período)";
-    return "Reels Agendados";
-  };
-
-  const getPublishedCardTitle = () => {
-    if (dateFilter === "today") return "Reels Publicados (Hoje)";
-    if (dateFilter === "yesterday") return "Reels Publicados (Ontem)";
-    if (dateFilter === "7d") return "Reels Publicados (7d)";
-    if (dateFilter === "30d") return "Reels Publicados (30d)";
-    if (dateFilter === "custom") return "Reels Publicados (Período)";
-    return "Reels Publicados";
-  };
-
-  const getScheduledLabel = () => {
-    if (dateFilter === "today") return "reels hoje";
-    if (dateFilter === "yesterday") return "reels ontem";
-    if (dateFilter === "7d") return "reels em 7 dias";
-    if (dateFilter === "30d") return "reels em 30 dias";
-    return "reels agendados";
-  };
+  // Unique categories for filter
+  const categories = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; color: string }>();
+    accounts.forEach((a) => {
+      if (a.account_categories) {
+        map.set(a.account_categories.id, a.account_categories);
+      }
+    });
+    return Array.from(map.values());
+  }, [accounts]);
 
   return (
-    <div className="space-y-8">
-      {/* Header com Filtro */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+    <div className="space-y-8 animate-in fade-in-50 duration-300 pb-16">
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {/* 1. Header & Quick Actions */}
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">Painel Geral</h1>
-          <p className="text-muted-foreground mt-1">
-            Acompanhe as métricas de postagem dos seus Reels.
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text text-transparent">
+              Painel de Performance & Saúde
+            </h1>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/25">
+              <Sparkles className="size-3" /> Live Analytics
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Monitore o ranking de engajamento, alcance e integridade de todas as suas contas conectadas.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
-          {/* Filtro por Conta */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground font-medium shrink-0">Conta:</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="border-border/60 bg-card hover:bg-secondary rounded-xl text-xs font-semibold h-10 gap-2 cursor-pointer w-48 justify-between"
-                >
-                  <span className="truncate">
-                    {selectedAccountIds.length === accounts.length
-                      ? "Todas as contas"
-                      : selectedAccountIds.length === 0
-                        ? "Nenhuma conta"
-                        : `${selectedAccountIds.length} selecionada(s)`}
-                  </span>
-                  <ChevronDown className="size-3 text-muted-foreground shrink-0" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 bg-card border border-border/60">
-                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold flex items-center justify-between">
-                  <span>Selecionar Contas</span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedAccountIds(accounts.map((a) => a.id));
-                      }}
-                      className="text-[10px] text-primary hover:underline font-bold cursor-pointer"
-                    >
-                      Todas
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedAccountIds([]);
-                      }}
-                      className="text-[10px] text-destructive hover:underline font-bold cursor-pointer"
-                    >
-                      Limpar
-                    </button>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {accounts.map((a) => {
-                  const isChecked = selectedAccountIds.includes(a.id);
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={a.id}
-                      checked={isChecked}
-                      onCheckedChange={(checked) => {
-                        if (checked) {
-                          setSelectedAccountIds((prev) => [...prev, a.id]);
-                        } else {
-                          setSelectedAccountIds((prev) => prev.filter((id) => id !== a.id));
-                        }
-                      }}
-                      onSelect={(e) => e.preventDefault()}
-                      className="cursor-pointer font-medium text-xs py-2"
-                    >
-                      <span className="flex items-center gap-2">
-                        {a.account_categories && (
-                          <span
-                            className="size-2.5 rounded-full shrink-0 ring-1 ring-white/10"
-                            style={{ backgroundColor: a.account_categories.color }}
-                          />
-                        )}
-                        @{a.username}
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Button
+            onClick={handleSyncInsights}
+            disabled={syncing || accounts.length === 0}
+            variant="outline"
+            className="border-border/60 hover:bg-secondary/60 h-10 px-4 gap-2 text-xs font-bold rounded-xl shadow-sm transition"
+          >
+            <RefreshCw className={`size-3.5 text-primary ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Sincronizando..." : "Sincronizar Métricas & Saúde"}
+          </Button>
 
-          {/* Filtro por Período */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground font-medium shrink-0">Período:</span>
-            <Select value={dateFilter} onValueChange={setDateFilter}>
-              <SelectTrigger className="w-48 bg-card border-border/60 rounded-xl h-10 font-medium">
-                <SelectValue placeholder="Qualquer período" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border/60">
-                <SelectItem value="all" className="cursor-pointer">
-                  Qualquer período
-                </SelectItem>
-                <SelectItem value="today" className="cursor-pointer">
-                  Hoje
-                </SelectItem>
-                <SelectItem value="yesterday" className="cursor-pointer">
-                  Ontem
-                </SelectItem>
-                <SelectItem value="7d" className="cursor-pointer">
-                  Últimos 7 dias
-                </SelectItem>
-                <SelectItem value="30d" className="cursor-pointer">
-                  Últimos 30 dias
-                </SelectItem>
-                <SelectItem value="custom" className="cursor-pointer">
-                  Personalizado...
-                </SelectItem>
-              </SelectContent>
-            </Select>
+          <Link to="/schedule">
+            <Button className="bg-gradient-brand text-primary-foreground border-0 hover:opacity-90 h-10 px-4 gap-2 text-xs font-bold rounded-xl shadow-glow">
+              <Plus className="size-4" /> Novo Reel
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {/* 2. Account Health & Restriction Diagnostic Banner */}
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {accounts.length > 0 && (
+        <>
+          {restrictedAccounts.length > 0 || expiredAccounts.length > 0 ? (
+            <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 md:p-5 shadow-sm space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert className="size-5 text-destructive shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="text-sm font-bold text-destructive">
+                      Diagnóstico da Meta: Atenção necessária em {restrictedAccounts.length + expiredAccounts.length} conta(s)
+                    </h3>
+                    <p className="text-xs text-foreground/80 mt-1 leading-relaxed">
+                      {restrictedAccounts.length > 0 && (
+                        <span>
+                          <strong>{restrictedAccounts.length} conta(s)</strong> com bloqueio temporário de postagem da Meta (API access blocked).{" "}
+                        </span>
+                      )}
+                      {expiredAccounts.length > 0 && (
+                        <span>
+                          <strong>{expiredAccounts.length} conta(s)</strong> com token expirado aguardando reconexão.
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <Link to="/accounts">
+                  <Button size="sm" variant="destructive" className="text-xs h-8 font-bold rounded-lg shrink-0">
+                    Gerenciar Contas
+                  </Button>
+                </Link>
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {restrictedAccounts.map((a) => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-destructive/20 text-destructive border border-destructive/30"
+                  >
+                    🔴 @{a.username}: Restrição temporária da Meta
+                  </span>
+                ))}
+                {expiredAccounts.map((a) => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-warning/20 text-warning border border-warning/30"
+                  >
+                    ⚠️ @{a.username}: Sessão expirada
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 shadow-sm flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <ShieldCheck className="size-4 text-emerald-400 shrink-0" />
+                <span className="text-xs font-semibold text-emerald-400">
+                  Todas as {accounts.length} contas conectadas estão <strong>100% Saudáveis e Operacionais</strong> junto à Meta.
+                </span>
+              </div>
+              <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                API Meta Status: 200 OK
+              </span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {/* 3. Global KPI Cards (Summary) */}
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Total Views */}
+        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Visualizações Totais</span>
+            <div className="size-8 rounded-xl bg-primary/10 text-primary grid place-items-center">
+              <Eye className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              {totalViewsSum.toLocaleString("pt-BR")}
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              <TrendingUp className="size-3 text-emerald-400" /> Soma de todas as contas
+            </span>
+          </div>
+        </div>
+
+        {/* Total Reach */}
+        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Alcance Consolidado</span>
+            <div className="size-8 rounded-xl bg-purple-500/10 text-purple-400 grid place-items-center">
+              <Users className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              {totalReachSum.toLocaleString("pt-BR")}
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              Contas únicas impactadas
+            </span>
+          </div>
+        </div>
+
+        {/* Avg Engagement */}
+        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Engajamento Médio</span>
+            <div className="size-8 rounded-xl bg-pink-500/10 text-pink-400 grid place-items-center">
+              <Heart className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              {avgEngagementRate}%
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              Curtidas, comentários e salvamentos
+            </span>
+          </div>
+        </div>
+
+        {/* Total Followers */}
+        <div className="rounded-2xl border border-border/50 bg-card/60 p-5 backdrop-blur-sm shadow-card flex flex-col justify-between space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground">Total de Seguidores</span>
+            <div className="size-8 rounded-xl bg-emerald-500/10 text-emerald-400 grid place-items-center">
+              <Instagram className="size-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              {totalFollowersSum.toLocaleString("pt-BR")}
+            </div>
+            <span className="text-[11px] text-muted-foreground font-medium mt-1 flex items-center gap-1">
+              Em {accounts.length} contas gerenciadas
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Calendário para Período Personalizado */}
-      {dateFilter === "custom" && (
-        <div className="flex flex-col md:flex-row items-start gap-6 p-5 rounded-2xl border border-border/40 bg-card/25 backdrop-blur-sm shadow-card animate-in slide-in-from-top-2 duration-300">
-          <div className="space-y-3 shrink-0">
-            <h3 className="text-sm font-bold text-foreground">Intervalo de datas</h3>
-            <p className="text-xs text-muted-foreground leading-relaxed max-w-[200px]">
-              Selecione o dia inicial e o dia final clicando diretamente no calendário para filtrar
-              as métricas do painel.
-            </p>
-            {dateRange?.from && (
-              <div className="p-3 rounded-xl bg-secondary/40 border border-border/40 space-y-1">
-                <span className="text-[10px] uppercase tracking-wider font-extrabold text-muted-foreground block">
-                  Período selecionado:
-                </span>
-                <span className="text-xs font-bold text-primary">
-                  {dateRange.from.toLocaleDateString("pt-BR")}
-                  {dateRange.to
-                    ? ` — ${dateRange.to.toLocaleDateString("pt-BR")}`
-                    : " (Clique no dia de término)"}
-                </span>
-              </div>
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {/* 4. Complete Leaderboard / Ranking Table of ALL Accounts */}
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      <div className="rounded-2xl border border-border/60 bg-card/40 backdrop-blur-sm shadow-card overflow-hidden">
+        {/* Table Header Controls */}
+        <div className="p-5 border-b border-border/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-gradient-brand text-primary-foreground grid place-items-center shadow-glow">
+              <Trophy className="size-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-foreground">
+                Ranking de Performance de Contas
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Listagem completa das {accounts.length} contas conectadas, ordenadas por desempenho.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Search Input */}
+            <div className="relative w-full sm:w-48">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Buscar conta..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-9 text-xs bg-secondary/50 border-border/50 rounded-xl"
+              />
+            </div>
+
+            {/* Category Filter */}
+            {categories.length > 0 && (
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="h-9 text-xs w-36 bg-secondary/50 border-border/50 rounded-xl">
+                  <SelectValue placeholder="Categoria" />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border-border/60">
+                  <SelectItem value="all">Todas Categorias</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <span className="flex items-center gap-1.5">
+                        <span className="size-2 rounded-full" style={{ backgroundColor: c.color }} />
+                        {c.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
+
+            {/* Sort Dropdown */}
+            <Select value={sortBy} onValueChange={(val: any) => setSortBy(val)}>
+              <SelectTrigger className="h-9 text-xs w-44 bg-secondary/50 border-border/50 rounded-xl font-semibold">
+                <ArrowUpDown className="size-3.5 mr-1 text-primary" />
+                <SelectValue placeholder="Ordenar por" />
+              </SelectTrigger>
+              <SelectContent className="bg-popover border-border/60">
+                <SelectItem value="views">🥇 Mais Visualizações</SelectItem>
+                <SelectItem value="reach">👥 Maior Alcance</SelectItem>
+                <SelectItem value="followers">📈 Mais Seguidores</SelectItem>
+                <SelectItem value="engagement">💬 Maior Engajamento</SelectItem>
+                <SelectItem value="health">🛡️ Status de Saúde</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-
-          <Calendar
-            mode="range"
-            selected={dateRange}
-            onSelect={setDateRange}
-            className="rounded-xl border border-border/40 bg-card p-3"
-          />
         </div>
-      )}
 
-      {loading ? (
-        <div className="grid gap-6 md:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-32 rounded-2xl bg-card border border-border/50 animate-pulse"
-            />
-          ))}
-        </div>
-      ) : (
-        <>
-          {/* Métricas */}
-          <div className="grid gap-6 md:grid-cols-3">
-            {/* Card 1: Agendados pro Dia/Período */}
-            <div className="rounded-2xl border border-border/50 bg-card/45 p-6 shadow-card hover:bg-card/75 transition relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition duration-300">
-                <CalendarIcon className="size-20 text-primary" />
-              </div>
-              <div className="flex items-center gap-3 text-muted-foreground text-sm font-semibold mb-3">
-                <div className="size-8 rounded-lg bg-primary/10 grid place-items-center text-primary">
-                  <CalendarIcon className="size-4" />
-                </div>
-                {getScheduledCardTitle()}
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-extrabold text-gradient-brand">
-                  {scheduledPending}
-                </span>
-                <span className="text-xs text-muted-foreground">{getScheduledLabel()}</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
-                Prontos para postagem automática nas próximas horas.
-              </p>
-            </div>
-
-            {/* Card 2: Já Postados */}
-            <div className="rounded-2xl border border-border/50 bg-card/45 p-6 shadow-card hover:bg-card/75 transition relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition duration-300">
-                <CheckCircle2 className="size-20 text-success" />
-              </div>
-              <div className="flex items-center gap-3 text-muted-foreground text-sm font-semibold mb-3">
-                <div className="size-8 rounded-lg bg-success/10 grid place-items-center text-success">
-                  <CheckCircle2 className="size-4" />
-                </div>
-                {getPublishedCardTitle()}
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-extrabold text-success">{totalPublished}</span>
-                <span className="text-xs text-muted-foreground">publicados com sucesso</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-4 leading-relaxed flex items-center gap-1">
-                {totalFailed > 0 ? (
-                  <span className="text-destructive font-semibold flex items-center gap-1">
-                    <AlertCircle className="size-3.5 inline text-destructive shrink-0" />{" "}
-                    {totalFailed} falhas registradas
-                  </span>
-                ) : (
-                  <span>Sem falhas de publicação.</span>
-                )}
-              </p>
-            </div>
-
-            {/* Card 3: Contas Conectadas */}
-            <div className="rounded-2xl border border-border/50 bg-card/45 p-6 shadow-card hover:bg-card/75 transition relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition duration-300">
-                <Instagram className="size-20 text-accent" />
-              </div>
-              <div className="flex items-center gap-3 text-muted-foreground text-sm font-semibold mb-3">
-                <div className="size-8 rounded-lg bg-accent/10 grid place-items-center text-accent">
-                  <Instagram className="size-4" />
-                </div>
-                Contas Conectadas
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-extrabold text-accent">{totalAccounts}</span>
-                <span className="text-xs text-muted-foreground">perfis ativos</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
-                Todas gerenciadas a partir de um único painel.
-              </p>
-            </div>
+        {/* Table Content */}
+        {accounts.length === 0 ? (
+          <div className="p-12 text-center space-y-3">
+            <Instagram className="size-10 text-muted-foreground mx-auto opacity-50" />
+            <h3 className="font-bold text-sm">Nenhuma conta conectada</h3>
+            <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+              Conecte suas contas do Instagram para começar a visualizar rankings e métricas de desempenho.
+            </p>
+            <Link to="/accounts">
+              <Button size="sm" className="bg-gradient-brand text-primary-foreground border-0 mt-2">
+                Conectar Conta
+              </Button>
+            </Link>
           </div>
+        ) : filteredAndSortedAccounts.length === 0 ? (
+          <div className="p-10 text-center text-xs text-muted-foreground">
+            Nenhuma conta encontrada para a busca "{searchQuery}".
+          </div>
+        ) : (
+          <div className="divide-y divide-border/30 overflow-x-auto">
+            {filteredAndSortedAccounts.map((acc, index) => {
+              const viewsPercentage = totalViewsSum > 0 ? ((acc.total_views || 0) / totalViewsSum) * 100 : 0;
+              const isChampion = index === 0 && (acc.total_views || 0) > 0;
 
-          {/* Seção Inferior: Próximas Postagens e Ações */}
-          <div className="grid gap-6 lg:grid-cols-3">
-            {/* Próximos Reels */}
-            <div className="lg:col-span-2 rounded-2xl border border-border/50 bg-card/30 p-6 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="font-bold text-lg flex items-center gap-2">
-                    <Clock className="size-5 text-primary" /> Próximas Publicações
-                  </h3>
-                  <Link
-                    to="/calendar"
-                    className="text-xs text-primary hover:underline font-semibold flex items-center gap-0.5"
-                  >
-                    Ver calendário completo <ChevronRight className="size-3" />
-                  </Link>
-                </div>
+              return (
+                <div
+                  key={acc.id}
+                  className={`p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+                    isChampion ? "bg-primary/[0.04] border-l-4 border-l-amber-400" : "hover:bg-secondary/20"
+                  }`}
+                >
+                  {/* Left: Rank + Account Info */}
+                  <div className="flex items-center gap-3.5 min-w-[220px]">
+                    {/* Rank Badge */}
+                    <div className="shrink-0 flex items-center justify-center size-8 rounded-xl font-extrabold text-xs">
+                      {index === 0 ? (
+                        <span className="text-base" title="1º Lugar - Conta Campeã">
+                          🥇
+                        </span>
+                      ) : index === 1 ? (
+                        <span className="text-base" title="2º Lugar">
+                          🥈
+                        </span>
+                      ) : index === 2 ? (
+                        <span className="text-base" title="3º Lugar">
+                          🥉
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground font-mono">#{index + 1}</span>
+                      )}
+                    </div>
 
-                {upcomingPosts.length === 0 ? (
-                  <div className="text-center py-10 border border-dashed border-border/60 rounded-xl bg-card/10">
-                    <p className="text-muted-foreground text-sm">
-                      Nenhum Reel agendado para o futuro.
-                    </p>
-                    <Link to="/calendar" className="inline-block mt-4">
+                    {/* Profile Picture / Initial */}
+                    <div className="relative shrink-0">
+                      {acc.profile_picture_url ? (
+                        <img
+                          src={acc.profile_picture_url}
+                          alt={acc.username}
+                          className="size-10 rounded-xl object-cover ring-1 ring-border"
+                        />
+                      ) : (
+                        <div className="size-10 rounded-xl bg-gradient-brand text-primary-foreground grid place-items-center font-bold text-xs shadow-sm">
+                          {acc.username.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      {acc.account_categories && (
+                        <span
+                          className="absolute -bottom-1 -right-1 size-3 rounded-full ring-2 ring-background"
+                          style={{ backgroundColor: acc.account_categories.color }}
+                          title={acc.account_categories.name}
+                        />
+                      )}
+                    </div>
+
+                    {/* Username and Health Badge */}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-foreground truncate">
+                          @{acc.username}
+                        </span>
+                        {isChampion && (
+                          <span className="px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-400/15 text-amber-400 border border-amber-400/30">
+                            🏆 Top 1
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {acc.health_status === "healthy" ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
+                            <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Saudável
+                          </span>
+                        ) : acc.health_status === "token_expired" ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-warning" title={acc.health_reason || ""}>
+                            <AlertCircle className="size-3 text-warning" />
+                            Sessão Expirada
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-destructive" title={acc.health_reason || ""}>
+                            <AlertTriangle className="size-3 text-destructive" />
+                            Restrita pela Meta
+                          </span>
+                        )}
+
+                        {acc.account_categories && (
+                          <>
+                            <span className="text-muted-foreground/40 text-xs">•</span>
+                            <span className="text-[10px] text-muted-foreground font-medium">
+                              {acc.account_categories.name}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Middle / Right: Metrics Comparison */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1 max-w-2xl">
+                    {/* Views & Progress Bar */}
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Visualizações
+                      </div>
+                      <div className="text-sm font-extrabold text-foreground">
+                        {(acc.total_views || 0).toLocaleString("pt-BR")}
+                      </div>
+                      <div className="w-full bg-secondary/80 h-1.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-primary h-full rounded-full transition-all duration-500"
+                          style={{ width: `${Math.max(viewsPercentage, 4)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Reach */}
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Alcance
+                      </div>
+                      <div className="text-sm font-extrabold text-foreground">
+                        {(acc.total_reach || 0).toLocaleString("pt-BR")}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">contas únicas</span>
+                    </div>
+
+                    {/* Followers & Posts */}
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Seguidores
+                      </div>
+                      <div className="text-sm font-extrabold text-foreground">
+                        {(acc.followers_count || 0).toLocaleString("pt-BR")}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">{acc.media_count || 0} posts</span>
+                    </div>
+
+                    {/* Engagement Rate */}
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Engajamento
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-extrabold text-foreground">
+                          {acc.engagement_rate || 0}%
+                        </span>
+                        {Number(acc.engagement_rate || 0) > 3 && (
+                          <span className="text-xs">🔥</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">
+                        {(acc.total_likes || 0) + (acc.total_comments || 0)} interações
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="shrink-0 flex items-center justify-end">
+                    <Link to="/schedule">
                       <Button
                         size="sm"
-                        className="bg-gradient-brand text-primary-foreground border-0"
+                        variant="outline"
+                        className="h-8 text-xs font-bold rounded-lg border-border/60 hover:bg-secondary"
                       >
-                        Agendar Primeiro Reel
+                        Agendar Reel
                       </Button>
                     </Link>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    {upcomingPosts.map((p) => (
-                      <div
-                        key={p.id}
-                        className="flex gap-4 p-3 rounded-xl bg-card/65 border border-border/40 hover:bg-card/90 transition shadow-sm"
-                      >
-                        {p.video_url ? (
-                          <video
-                            src={p.video_url}
-                            className="size-16 rounded-lg object-cover bg-background shrink-0"
-                            muted
-                            preload="metadata"
-                          />
-                        ) : (
-                          <div
-                            className="size-16 rounded-lg bg-secondary/60 flex flex-col items-center justify-center shrink-0 border border-border/40 shadow-inner gap-1"
-                            title="Vídeo removido para economizar espaço"
-                          >
-                            <span className="text-[8px] text-muted-foreground/80 font-bold">
-                              Limpo
-                            </span>
-                          </div>
-                        )}
-                        <div className="min-w-0 flex-1 flex flex-col justify-between py-0.5">
-                          <div>
-                            <div className="flex items-center gap-2 text-xs">
-                              <span className="font-bold text-primary flex items-center gap-1.5">
-                                @{p.instagram_accounts?.username || "instagram"}
-                              </span>
-                              <span className="text-muted-foreground">•</span>
-                              <span className="text-muted-foreground">
-                                {new Date(p.scheduled_at).toLocaleString("pt-BR", {
-                                  dateStyle: "short",
-                                  timeStyle: "short",
-                                })}
-                              </span>
-                            </div>
-                            <p className="text-sm font-medium mt-1 truncate text-foreground/90">
-                              {p.caption || (
-                                <span className="text-muted-foreground italic">Sem legenda</span>
-                              )}
-                            </p>
-                          </div>
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warning bg-warning/10 border border-warning/20 px-2 py-0.5 rounded-full max-w-max">
-                            <Clock className="size-2.5 animate-pulse" /> Agendado
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {upcomingPosts.length > 0 && (
-                <div className="pt-4 border-t border-border/40 mt-4 flex justify-end">
-                  <Link to="/calendar">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-foreground text-xs font-semibold"
-                    >
-                      Gerenciar Agendamentos ({scheduledPending}) →
-                    </Button>
-                  </Link>
                 </div>
-              )}
-            </div>
-
-            {/* Ações Rápidas */}
-            <div className="rounded-2xl border border-border/50 bg-gradient-brand/5 p-6 flex flex-col justify-between shadow-card">
-              <div className="space-y-4">
-                <div className="size-12 rounded-xl bg-gradient-brand grid place-items-center">
-                  <Sparkles className="size-6 text-primary-foreground" />
-                </div>
-                <h3 className="font-extrabold text-xl">Agendamento Automático</h3>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Agende novos Reels adicionando arquivos de vídeo locais, legendas personalizadas e
-                  escolhendo o dia e hora exatos de postagem.
-                </p>
-              </div>
-
-              <div className="space-y-3 mt-8">
-                {totalAccounts > 0 ? (
-                  <Link to="/calendar" className="block w-full">
-                    <Button className="w-full bg-gradient-brand text-primary-foreground border-0 shadow-glow font-bold h-11 hover:opacity-95">
-                      <Plus className="size-4 mr-2" /> Agendar Novo Reel
-                    </Button>
-                  </Link>
-                ) : (
-                  <Link to="/accounts" className="block w-full">
-                    <Button className="w-full bg-gradient-brand text-primary-foreground border-0 shadow-glow font-bold h-11 hover:opacity-95">
-                      <Instagram className="size-4 mr-2" /> Conectar Conta
-                    </Button>
-                  </Link>
-                )}
-
-                <Link to="/accounts" className="block w-full">
-                  <Button
-                    variant="outline"
-                    className="w-full border-border hover:bg-secondary h-11 font-semibold text-sm rounded-xl"
-                  >
-                    Ver Contas Vinculadas
-                  </Button>
-                </Link>
-              </div>
-            </div>
+              );
+            })}
           </div>
-        </>
-      )}
+        )}
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      {/* 5. Top Viral Reels & Upcoming Scheduling Grid */}
+      {/* ═════════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Top Published Reels */}
+        <div className="rounded-2xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm shadow-card space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-sm text-foreground flex items-center gap-2">
+              <Award className="size-4 text-primary" /> Top Reels Publicados
+            </h3>
+            <Link to="/posts" className="text-xs text-primary hover:underline font-semibold">
+              Ver Todos
+            </Link>
+          </div>
+
+          {topReels.length === 0 ? (
+            <div className="p-8 text-center text-xs text-muted-foreground">
+              Nenhum post publicado com métricas registradas ainda.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {topReels.map((reel) => (
+                <div
+                  key={reel.id}
+                  className="rounded-xl border border-border/40 bg-secondary/20 p-2.5 flex flex-col justify-between space-y-2 hover:border-primary/30 transition"
+                >
+                  <div className="flex gap-2 items-start">
+                    {reel.video_url ? (
+                      <video
+                        src={reel.video_url}
+                        className="size-12 rounded-lg object-cover bg-background shrink-0"
+                        muted
+                        preload="metadata"
+                      />
+                    ) : (
+                      <div className="size-12 rounded-lg bg-secondary grid place-items-center shrink-0">
+                        <Video className="size-5 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-bold text-foreground truncate block">
+                        @{reel.instagram_accounts?.username || "instagram"}
+                      </span>
+                      <p className="text-[10px] text-muted-foreground line-clamp-1 mt-0.5">
+                        {reel.caption || "Sem legenda"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-border/20 text-[10px] font-semibold text-muted-foreground">
+                    <span className="flex items-center gap-1 text-foreground">
+                      <Eye className="size-3 text-primary" /> {(reel.views_count || 0).toLocaleString("pt-BR")}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Heart className="size-3 text-pink-400" /> {(reel.likes_count || 0).toLocaleString("pt-BR")}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Upcoming Scheduled Posts */}
+        <div className="rounded-2xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm shadow-card space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-sm text-foreground flex items-center gap-2">
+              <Clock className="size-4 text-purple-400" /> Próximas Postagens Agendadas
+            </h3>
+            <Link to="/posts" className="text-xs text-primary hover:underline font-semibold">
+              Ver Fila
+            </Link>
+          </div>
+
+          {upcomingPosts.length === 0 ? (
+            <div className="p-8 text-center text-xs text-muted-foreground">
+              Nenhuma postagem agendada no momento.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {upcomingPosts.map((post) => (
+                <div
+                  key={post.id}
+                  className="rounded-xl border border-border/40 bg-secondary/20 p-3 flex items-center justify-between gap-3 hover:border-primary/30 transition"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {post.video_url ? (
+                      <video
+                        src={post.video_url}
+                        className="size-9 rounded-lg object-cover bg-background shrink-0"
+                        muted
+                        preload="metadata"
+                      />
+                    ) : (
+                      <div className="size-9 rounded-lg bg-secondary grid place-items-center shrink-0">
+                        <Video className="size-4 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-foreground truncate">
+                          @{post.instagram_accounts?.username || "usuario"}
+                        </span>
+                        {post.is_trial && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary">
+                            🧪 Teste
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground truncate max-w-xs mt-0.5">
+                        {post.caption || "Sem legenda"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="text-xs font-bold text-foreground shrink-0">
+                    {new Date(post.scheduled_at).toLocaleString("pt-BR", {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
