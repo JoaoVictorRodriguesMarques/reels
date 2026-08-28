@@ -16,6 +16,7 @@ import {
   Layers,
   AlertTriangle,
   Trash2,
+  Video,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -130,7 +131,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const navItems = [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/calendar", label: "Calendário", icon: Calendar },
+    { to: "/calendar", label: "Fluxo de Reels", icon: Video },
     { to: "/bulk", label: "Postar em Massa", icon: Layers },
     { to: "/posts", label: "Excluir Reels", icon: Trash2 },
     { to: "/accounts", label: "Contas", icon: Instagram },
