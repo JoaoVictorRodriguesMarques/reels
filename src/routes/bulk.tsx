@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import {
   Upload,
   Loader2,
@@ -16,6 +16,11 @@ import {
   Info,
   Layers,
   ShieldCheck,
+  Image as ImageIcon,
+  Check,
+  CheckCircle2,
+  X,
+  Palette,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -46,6 +51,16 @@ type Account = {
   category_id?: string | null;
   account_categories?: { id: string; name: string; color: string } | null;
 };
+
+export type CoverMode = "single" | "multi";
+
+export interface CoverGroup {
+  id: string;
+  name: string;
+  file: File | null;
+  previewUrl: string | null;
+  accountIds: string[];
+}
 
 function shuffleArray(arr: number[]): number[] {
   const result = [...arr];
@@ -96,12 +111,24 @@ function BulkSchedulePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
+
+  // Cover Configuration State
+  const [coverMode, setCoverMode] = useState<CoverMode>("single");
+
+  // Single Cover State
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+
+  // Multi Cover Groups State
+  const [coverGroups, setCoverGroups] = useState<CoverGroup[]>([
+    { id: "group-1", name: "Capa Opção A", file: null, previewUrl: null, accountIds: [] },
+    { id: "group-2", name: "Capa Opção B", file: null, previewUrl: null, accountIds: [] },
+  ]);
+
+  // Upload cache
   const [uploadedVideoUrls, setUploadedVideoUrls] = useState<Record<string, string>>({});
-  const [uploadedCoverState, setUploadedCoverState] = useState<{ key: string; url: string } | null>(
-    null,
-  );
+  const [uploadedCoverCache, setUploadedCoverCache] = useState<Record<string, string>>({});
+
   const [caption, setCaption] = useState("");
 
   // Start date default to today in local timezone YYYY-MM-DD
@@ -152,12 +179,12 @@ function BulkSchedulePage() {
         const loadedAccounts = data ?? [];
         setAccounts(loadedAccounts);
 
-        // Preselect the active account or the first one
+        // Preselect all accounts or active one
         const activeId = localStorage.getItem("active_ig_account_id");
         if (activeId && loadedAccounts.some((a) => a.id === activeId)) {
           setSelectedAccounts([activeId]);
         } else if (loadedAccounts.length > 0) {
-          setSelectedAccounts([loadedAccounts[0].id]);
+          setSelectedAccounts(loadedAccounts.map((a) => a.id));
         }
       });
 
@@ -180,12 +207,15 @@ function BulkSchedulePage() {
       });
   }, []);
 
-  // Cleanup cover preview object url
+  // Cleanup object urls on unmount
   useEffect(() => {
     return () => {
       if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl);
+      coverGroups.forEach((g) => {
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl);
+      });
     };
-  }, [coverPreviewUrl]);
+  }, []);
 
   // Synchronize and shuffle video orders per account reactively
   useEffect(() => {
@@ -302,6 +332,109 @@ function BulkSchedulePage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  // Multi-cover group handlers
+  const handleAddCoverGroup = () => {
+    const nextIndex = coverGroups.length + 1;
+    const nextLetter = String.fromCharCode(64 + nextIndex); // A, B, C, D...
+    const newGroup: CoverGroup = {
+      id: `group-${Date.now()}`,
+      name: `Capa Opção ${nextLetter}`,
+      file: null,
+      previewUrl: null,
+      accountIds: [],
+    };
+    setCoverGroups((prev) => [...prev, newGroup]);
+  };
+
+  const handleRemoveCoverGroup = (groupId: string) => {
+    if (coverGroups.length <= 1) {
+      toast.error("Você precisa manter ao menos um grupo de capa.");
+      return;
+    }
+    const groupToRemove = coverGroups.find((g) => g.id === groupId);
+    if (groupToRemove?.previewUrl) {
+      URL.revokeObjectURL(groupToRemove.previewUrl);
+    }
+    setCoverGroups((prev) => prev.filter((g) => g.id !== groupId));
+  };
+
+  const handleCoverGroupFileChange = (groupId: string, file: File | null) => {
+    setCoverGroups((prev) =>
+      prev.map((g) => {
+        if (g.id !== groupId) return g;
+        if (g.previewUrl) URL.revokeObjectURL(g.previewUrl);
+        return {
+          ...g,
+          file,
+          previewUrl: file ? URL.createObjectURL(file) : null,
+        };
+      }),
+    );
+  };
+
+  const handleCoverGroupNameChange = (groupId: string, name: string) => {
+    setCoverGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, name } : g)),
+    );
+  };
+
+  const handleToggleAccountInCoverGroup = (groupId: string, accountId: string) => {
+    setCoverGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === groupId) {
+          const isAlreadyIn = g.accountIds.includes(accountId);
+          return {
+            ...g,
+            accountIds: isAlreadyIn
+              ? g.accountIds.filter((id) => id !== accountId)
+              : [...g.accountIds, accountId],
+          };
+        } else {
+          // Remove from other groups to maintain 1:1 cover mapping per account
+          return {
+            ...g,
+            accountIds: g.accountIds.filter((id) => id !== accountId),
+          };
+        }
+      }),
+    );
+  };
+
+  const handleAssignAllToCoverGroup = (groupId: string) => {
+    setCoverGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        accountIds: g.id === groupId ? [...selectedAccounts] : [],
+      })),
+    );
+  };
+
+  // Helper to get assigned cover info for a given account
+  const getCoverForAccount = (accId: string) => {
+    if (coverMode === "single") {
+      return {
+        previewUrl: coverPreviewUrl,
+        name: coverFile ? "Capa Comum" : "Miniatura do Vídeo",
+        hasCustomCover: !!coverFile,
+      };
+    }
+
+    const group = coverGroups.find((g) => g.accountIds.includes(accId));
+    if (group) {
+      return {
+        previewUrl: group.previewUrl,
+        name: group.name,
+        hasCustomCover: !!group.file,
+      };
+    }
+
+    return {
+      previewUrl: null,
+      name: "Sem capa atribuída",
+      hasCustomCover: false,
+    };
+  };
+
   // Helper to compute chronologically sorted schedule list
   interface ScheduleSlot {
     dateStr: string;
@@ -311,6 +444,8 @@ function BulkSchedulePage() {
     accountColor?: string;
     videoIndex: number;
     videoFileName: string;
+    coverPreviewUrl: string | null;
+    coverName: string;
   }
 
   const getScheduleSlots = (): ScheduleSlot[] => {
@@ -331,6 +466,8 @@ function BulkSchedulePage() {
 
       const order =
         accountVideoOrders[accId] || Array.from({ length: videoFiles.length }, (_, i) => i);
+
+      const coverInfo = getCoverForAccount(accId);
 
       order.forEach((videoIdx, i) => {
         if (videoIdx >= videoFiles.length) return;
@@ -365,6 +502,8 @@ function BulkSchedulePage() {
           accountColor: account.account_categories?.color,
           videoIndex: videoIdx,
           videoFileName: videoFiles[videoIdx].name,
+          coverPreviewUrl: coverInfo.previewUrl,
+          coverName: coverInfo.name,
         });
       });
     });
@@ -432,7 +571,7 @@ function BulkSchedulePage() {
       const totalVideos = videoFiles.length;
       const uploadedUrls: string[] = [];
 
-      // 1. Upload Video Files sequentially to prevent network congestion
+      // 1. Upload Video Files sequentially
       for (let i = 0; i < totalVideos; i++) {
         const fileObj = videoFiles[i];
         const fileKey = `${fileObj.name}-${fileObj.size}-${fileObj.lastModified}`;
@@ -444,7 +583,7 @@ function BulkSchedulePage() {
             `Vídeo ${i + 1} de ${totalVideos} já enviado (usando cache): ${fileObj.name}...`,
           );
           uploadedUrls.push(publicUrl);
-          setUploadProgress(Math.round(((i + 1) / totalVideos) * 90));
+          setUploadProgress(Math.round(((i + 1) / totalVideos) * 80));
           continue;
         }
 
@@ -478,35 +617,77 @@ function BulkSchedulePage() {
         // Save to cache state
         setUploadedVideoUrls((prev) => ({ ...prev, [fileKey]: publicUrl }));
         uploadedUrls.push(publicUrl);
-        setUploadProgress(Math.round(((i + 1) / totalVideos) * 90)); // 90% allocated for videos
+        setUploadProgress(Math.round(((i + 1) / totalVideos) * 80));
       }
 
-      // 2. Upload Cover File (if selected)
-      let coverUrl = null;
-      if (coverFile) {
-        const coverKey = `${coverFile.name}-${coverFile.size}-${coverFile.lastModified}`;
-        if (uploadedCoverState && uploadedCoverState.key === coverKey) {
-          coverUrl = uploadedCoverState.url;
-          setUploadStatus("Foto de capa comum já enviada (usando cache)...");
-        } else {
-          setUploadStatus("Enviando foto de capa comum...");
-          const coverUpload = await getUploadPresignedUrl({
-            data: {
-              fileName: coverFile.name,
-              contentType: coverFile.type || "image/jpeg",
-            },
-          });
+      // 2. Upload Covers based on CoverMode
+      const accountCoverUrlMap: Record<string, string | null> = {};
 
-          await fetchWithRetry(coverUpload.uploadUrl, {
-            method: "PUT",
-            body: coverFile,
-            headers: {
-              "Content-Type": coverFile.type || "image/jpeg",
-            },
-          });
+      if (coverMode === "single") {
+        let singleCoverUrl: string | null = null;
+        if (coverFile) {
+          const coverKey = `${coverFile.name}-${coverFile.size}-${coverFile.lastModified}`;
+          if (uploadedCoverCache[coverKey]) {
+            singleCoverUrl = uploadedCoverCache[coverKey];
+          } else {
+            setUploadStatus("Enviando foto de capa comum...");
+            const coverUpload = await getUploadPresignedUrl({
+              data: {
+                fileName: coverFile.name,
+                contentType: coverFile.type || "image/jpeg",
+              },
+            });
 
-          coverUrl = coverUpload.publicUrl;
-          setUploadedCoverState({ key: coverKey, url: coverUrl });
+            await fetchWithRetry(coverUpload.uploadUrl, {
+              method: "PUT",
+              body: coverFile,
+              headers: { "Content-Type": coverFile.type || "image/jpeg" },
+            });
+
+            singleCoverUrl = coverUpload.publicUrl;
+            setUploadedCoverCache((prev) => ({ ...prev, [coverKey]: singleCoverUrl! }));
+          }
+        }
+        selectedAccounts.forEach((accId) => {
+          accountCoverUrlMap[accId] = singleCoverUrl;
+        });
+      } else {
+        // Multi-Cover Groups Upload
+        const groupUrlMap: Record<string, string | null> = {};
+
+        for (let gIdx = 0; gIdx < coverGroups.length; gIdx++) {
+          const group = coverGroups[gIdx];
+          if (group.file) {
+            const coverKey = `${group.file.name}-${group.file.size}-${group.file.lastModified}`;
+            if (uploadedCoverCache[coverKey]) {
+              groupUrlMap[group.id] = uploadedCoverCache[coverKey];
+            } else {
+              setUploadStatus(`Enviando ${group.name} (${gIdx + 1} de ${coverGroups.length})...`);
+              const coverUpload = await getUploadPresignedUrl({
+                data: {
+                  fileName: group.file.name,
+                  contentType: group.file.type || "image/jpeg",
+                },
+              });
+
+              await fetchWithRetry(coverUpload.uploadUrl, {
+                method: "PUT",
+                body: group.file,
+                headers: { "Content-Type": group.file.type || "image/jpeg" },
+              });
+
+              const uploadedUrl = coverUpload.publicUrl;
+              groupUrlMap[group.id] = uploadedUrl;
+              setUploadedCoverCache((prev) => ({ ...prev, [coverKey]: uploadedUrl }));
+            }
+          } else {
+            groupUrlMap[group.id] = null;
+          }
+
+          // Map accounts in this group
+          group.accountIds.forEach((accId) => {
+            accountCoverUrlMap[accId] = groupUrlMap[group.id] || null;
+          });
         }
       }
 
@@ -521,6 +702,8 @@ function BulkSchedulePage() {
       selectedAccounts.forEach((accId) => {
         const order =
           accountVideoOrders[accId] || Array.from({ length: totalVideos }, (_, idx) => idx);
+
+        const assignedCoverUrl = accountCoverUrlMap[accId] || null;
 
         order.forEach((videoIdx, i) => {
           let dayIndex = 0;
@@ -552,7 +735,7 @@ function BulkSchedulePage() {
             user_id: uid,
             instagram_account_id: accId,
             video_url: uploadedUrls[videoIdx],
-            cover_url: coverUrl,
+            cover_url: assignedCoverUrl,
             caption,
             scheduled_at: scheduledDate.toISOString(),
             status: "pending",
@@ -565,7 +748,7 @@ function BulkSchedulePage() {
               user_id: uid,
               instagram_account_id: accId,
               video_url: uploadedUrls[videoIdx],
-              cover_url: coverUrl,
+              cover_url: assignedCoverUrl,
               caption,
               scheduled_at: scheduledDate.toISOString(),
               status: "pending",
@@ -591,6 +774,17 @@ function BulkSchedulePage() {
     }
   }
 
+  // Count assigned accounts in multi-mode
+  const assignedAccountsCount = useMemo(() => {
+    const set = new Set<string>();
+    coverGroups.forEach((g) => {
+      if (g.file) {
+        g.accountIds.forEach((id) => set.add(id));
+      }
+    });
+    return set.size;
+  }, [coverGroups]);
+
   return (
     <div className="space-y-8 max-w-6xl pb-16">
       <div>
@@ -599,7 +793,7 @@ function BulkSchedulePage() {
         </h1>
         <p className="text-muted-foreground mt-1">
           Distribua vários vídeos em datas e horários sequenciais para múltiplas contas de uma só
-          vez.
+          vez, com suporte a fotos de capa diferenciadas por conta.
         </p>
       </div>
 
@@ -618,35 +812,55 @@ function BulkSchedulePage() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-8 lg:grid-cols-12 items-start">
-          {/* Form Column */}
-          <form
-            onSubmit={handleSubmit}
-            className="space-y-6 lg:col-span-7 bg-card border border-border/50 p-6 rounded-2xl shadow-card"
-          >
-            {/* Step 1: Accounts */}
+        <div className="grid gap-8 lg:grid-cols-12">
+          {/* Main Configuration Form */}
+          <form onSubmit={handleSubmit} className="lg:col-span-7 space-y-6">
+            {/* Step 1: Select Accounts */}
             <div className="space-y-3">
-              <Label className="text-base font-bold text-foreground">1. Selecionar Contas</Label>
+              <div className="flex justify-between items-center">
+                <Label className="text-base font-bold text-foreground">
+                  1. Selecionar Contas de Destino
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedAccounts(accounts.map((a) => a.id))}
+                    className="text-xs h-7 px-2.5 font-bold"
+                  >
+                    Marcar Todas ({accounts.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedAccounts([])}
+                    className="text-xs h-7 px-2 text-destructive hover:bg-destructive/10"
+                  >
+                    Desmarcar
+                  </Button>
+                </div>
+              </div>
+
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full justify-between border-border/60 hover:bg-secondary/45 rounded-xl text-sm font-medium h-11 px-3.5 flex items-center bg-card"
+                    className="w-full justify-between h-12 bg-card border-border/60 hover:bg-card/80 text-left px-4 rounded-xl shadow-sm"
                   >
-                    <div className="flex items-center gap-2 truncate">
-                      <Instagram className="size-4 text-muted-foreground shrink-0" />
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Instagram className="size-4 text-pink-500 shrink-0" />
                       {selectedAccounts.length === 0 ? (
-                        <span className="text-muted-foreground text-sm font-normal">
-                          Selecione as contas
-                        </span>
+                        <span className="text-muted-foreground">Nenhuma conta selecionada</span>
                       ) : selectedAccounts.length === 1 ? (
-                        <span className="flex items-center gap-1.5 truncate text-foreground font-semibold">
+                        <span className="text-foreground font-semibold flex items-center gap-1.5 truncate">
                           {(() => {
                             const acc = accounts.find((a) => a.id === selectedAccounts[0]);
                             return (
                               <>
-                                {acc?.account_categories?.color && (
+                                {acc?.account_categories && (
                                   <span
                                     className="size-2 rounded-full shrink-0 ring-1 ring-white/10"
                                     style={{ backgroundColor: acc.account_categories.color }}
@@ -659,7 +873,7 @@ function BulkSchedulePage() {
                         </span>
                       ) : (
                         <span className="text-foreground font-semibold">
-                          {selectedAccounts.length} contas selecionadas
+                          {selectedAccounts.length} de {accounts.length} contas selecionadas
                         </span>
                       )}
                     </div>
@@ -811,7 +1025,7 @@ function BulkSchedulePage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleRemoveVideo(idx)}
-                        className="size-7 hover:bg-destructive/15 text-muted-foreground hover:text-destructive rounded-md shrink-0"
+                        className="size-7 hover:bg-destructive/15 text-muted-foreground hover:text-destructive rounded-md shrink-0 cursor-pointer"
                       >
                         <Trash2 className="size-3.5" />
                       </Button>
@@ -821,66 +1035,262 @@ function BulkSchedulePage() {
               )}
             </div>
 
-            {/* Step 3: Common Cover and Caption */}
-            <div className="space-y-3">
-              <Label className="text-base font-bold text-foreground">
-                3. Capa e Legenda Únicas
-              </Label>
+            {/* Step 3: Cover Configuration (Single or Multi-Account Cover) */}
+            <div className="space-y-4 rounded-2xl border border-border/60 bg-card/50 p-5 shadow-card">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/40 pb-3">
+                <div>
+                  <Label className="text-base font-bold text-foreground flex items-center gap-2">
+                    <ImageIcon className="size-4 text-primary" /> 3. Gerenciamento de Fotos de Capa
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Escolha se deseja uma capa comum ou capas diferentes para cada grupo de contas.
+                  </p>
+                </div>
 
-              {/* Optional Cover */}
-              <div className="space-y-1">
-                <Label className="text-xs font-semibold text-muted-foreground">
-                  Foto de Capa Comum (Opcional)
-                </Label>
-                <label className="block cursor-pointer">
-                  <input
-                    type="file"
-                    accept="image/png, image/jpeg, image/jpg"
-                    className="sr-only"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      setCoverFile(f);
-                      if (f) {
-                        const url = URL.createObjectURL(f);
-                        setCoverPreviewUrl(url);
-                      } else {
-                        setCoverPreviewUrl(null);
-                        setUploadedCoverState(null);
-                      }
-                    }}
-                  />
-                  <div className="rounded-xl border border-border hover:border-primary/60 transition p-4 text-center bg-card flex flex-col items-center justify-center min-h-[80px]">
-                    {coverFile ? (
-                      <div className="flex items-center gap-4">
-                        {coverPreviewUrl && (
-                          <img
-                            src={coverPreviewUrl}
-                            alt="Capa comum preview"
-                            className="w-10 h-14 object-cover rounded-lg border border-border/80"
-                          />
-                        )}
-                        <div className="text-left">
-                          <span className="font-semibold text-xs text-foreground block truncate max-w-[200px]">
-                            {coverFile.name}
-                          </span>
-                          <span className="text-[10px] text-primary underline font-medium">
-                            Trocar imagem
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 text-muted-foreground text-xs font-semibold">
-                        <Upload className="size-4 text-primary" />
-                        <span>Escolher capa comum para todos os vídeos</span>
-                      </div>
-                    )}
-                  </div>
-                </label>
+                {/* Mode Selector Buttons */}
+                <div className="flex items-center p-1 bg-secondary/60 rounded-xl border border-border/40 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setCoverMode("single")}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      coverMode === "single"
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Capa Única
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCoverMode("multi")}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      coverMode === "multi"
+                        ? "bg-gradient-brand text-primary-foreground shadow-glow"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Palette className="size-3.5" /> Capas Diferenciadas
+                  </button>
+                </div>
               </div>
 
-              {/* Caption */}
-              <div className="space-y-1">
-                <Label htmlFor="caption" className="text-xs font-semibold text-muted-foreground">
+              {/* MODE 1: SINGLE COVER */}
+              {coverMode === "single" ? (
+                <div className="space-y-2 animate-in fade-in-50 duration-200">
+                  <Label className="text-xs font-semibold text-muted-foreground">
+                    Foto de Capa Comum para Todas as Contas (Opcional)
+                  </Label>
+                  <label className="block cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/png, image/jpeg, image/jpg"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        setCoverFile(f);
+                        if (f) {
+                          const url = URL.createObjectURL(f);
+                          setCoverPreviewUrl(url);
+                        } else {
+                          setCoverPreviewUrl(null);
+                        }
+                      }}
+                    />
+                    <div className="rounded-xl border border-border hover:border-primary/60 transition p-4 text-center bg-card flex flex-col items-center justify-center min-h-[80px]">
+                      {coverFile ? (
+                        <div className="flex items-center gap-4">
+                          {coverPreviewUrl && (
+                            <img
+                              src={coverPreviewUrl}
+                              alt="Capa comum preview"
+                              className="w-12 h-16 object-cover rounded-lg border border-border/80 shadow-sm"
+                            />
+                          )}
+                          <div className="text-left">
+                            <span className="font-bold text-xs text-foreground block truncate max-w-[240px]">
+                              {coverFile.name}
+                            </span>
+                            <span className="text-[11px] text-primary underline font-medium mt-0.5 block">
+                              Clique para trocar imagem
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-muted-foreground text-xs font-semibold">
+                          <Upload className="size-4 text-primary" />
+                          <span>Clique para escolher uma foto de capa para todas as contas</span>
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              ) : (
+                /* MODE 2: MULTI-COVER BY ACCOUNT GROUP */
+                <div className="space-y-4 animate-in fade-in-50 duration-200">
+                  <div className="flex items-center justify-between bg-primary/[0.06] border border-primary/20 p-3 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="size-4 text-primary" />
+                      <span className="text-xs font-bold text-foreground">
+                        {assignedAccountsCount} de {selectedAccounts.length} contas com capa configurada
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleAddCoverGroup}
+                      className="text-xs h-7 font-bold bg-primary text-primary-foreground rounded-lg gap-1 cursor-pointer"
+                    >
+                      <Plus className="size-3.5" /> Adicionar Outra Capa
+                    </Button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {coverGroups.map((group, gIdx) => {
+                      return (
+                        <div
+                          key={group.id}
+                          className="rounded-xl border border-border/60 bg-secondary/15 p-4 space-y-3.5"
+                        >
+                          {/* Group Header & Title */}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="size-6 rounded-lg bg-primary/15 text-primary text-xs font-extrabold grid place-items-center shrink-0">
+                                {gIdx + 1}
+                              </span>
+                              <Input
+                                value={group.name}
+                                onChange={(e) =>
+                                  handleCoverGroupNameChange(group.id, e.target.value)
+                                }
+                                placeholder="Nome da capa (ex: Capa Variante 1)"
+                                className="h-8 text-xs font-bold bg-card max-w-[200px]"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleAssignAllToCoverGroup(group.id)}
+                                className="text-[11px] h-7 px-2.5 font-semibold cursor-pointer"
+                                title="Atribuir todas as contas selecionadas a esta capa"
+                              >
+                                Todas as Contas
+                              </Button>
+
+                              {coverGroups.length > 1 && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleRemoveCoverGroup(group.id)}
+                                  className="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg cursor-pointer"
+                                  title="Excluir este grupo de capa"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Image Upload for this Group */}
+                          <div className="flex items-center gap-3">
+                            <label className="block cursor-pointer flex-1">
+                              <input
+                                type="file"
+                                accept="image/png, image/jpeg, image/jpg"
+                                className="sr-only"
+                                onChange={(e) =>
+                                  handleCoverGroupFileChange(
+                                    group.id,
+                                    e.target.files?.[0] ?? null,
+                                  )
+                                }
+                              />
+                              <div className="rounded-xl border border-dashed border-border/80 hover:border-primary/60 transition p-3 text-center bg-card flex items-center justify-center gap-3 min-h-[64px]">
+                                {group.file && group.previewUrl ? (
+                                  <div className="flex items-center gap-3">
+                                    <img
+                                      src={group.previewUrl}
+                                      alt={group.name}
+                                      className="size-10 object-cover rounded-lg border border-border/80"
+                                    />
+                                    <div className="text-left">
+                                      <span className="font-bold text-xs text-foreground block truncate max-w-[200px]">
+                                        {group.file.name}
+                                      </span>
+                                      <span className="text-[10px] text-primary underline font-medium">
+                                        Trocar imagem
+                                      </span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 text-muted-foreground text-xs font-semibold">
+                                    <Upload className="size-3.5 text-primary" />
+                                    <span>Carregar foto de capa para este grupo</span>
+                                  </div>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+
+                          {/* Account Assignment Chips */}
+                          <div className="space-y-1.5 pt-1">
+                            <Label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
+                              Contas que receberão esta capa ({group.accountIds.length}):
+                            </Label>
+
+                            {selectedAccounts.length === 0 ? (
+                              <p className="text-xs text-muted-foreground italic">
+                                Selecione as contas de destino no Passo 1 primeiro.
+                              </p>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1 bg-background/50 rounded-xl border border-border/30">
+                                {selectedAccounts.map((accId) => {
+                                  const acc = accounts.find((a) => a.id === accId);
+                                  if (!acc) return null;
+                                  const isSelected = group.accountIds.includes(accId);
+
+                                  return (
+                                    <button
+                                      key={accId}
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleAccountInCoverGroup(group.id, accId)
+                                      }
+                                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                                        isSelected
+                                          ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                                          : "bg-secondary/40 text-muted-foreground hover:text-foreground border-border/40 hover:bg-secondary"
+                                      }`}
+                                    >
+                                      {acc.account_categories && (
+                                        <span
+                                          className="size-2 rounded-full"
+                                          style={{
+                                            backgroundColor: acc.account_categories.color,
+                                          }}
+                                        />
+                                      )}
+                                      @{acc.username}
+                                      {isSelected && <Check className="size-3 ml-0.5 stroke-[3]" />}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Caption Input */}
+              <div className="space-y-1 pt-2 border-t border-border/40">
+                <Label htmlFor="caption" className="text-xs font-bold text-foreground">
                   Legenda dos Reels
                 </Label>
                 <Textarea
@@ -899,13 +1309,15 @@ function BulkSchedulePage() {
                 <Label className="text-base font-bold text-foreground">
                   4. Cronograma de Postagem
                 </Label>
-                <div className="flex bg-secondary/30 p-1 rounded-xl border border-border/30 w-full sm:w-auto">
+
+                {/* Mode Switcher */}
+                <div className="flex items-center p-1 bg-secondary/60 rounded-xl border border-border/40">
                   <button
                     type="button"
                     onClick={() => setIsRandomTimeMode(false)}
-                    className={`flex-1 sm:flex-initial py-1 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                       !isRandomTimeMode
-                        ? "bg-card text-foreground shadow-sm"
+                        ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
@@ -914,9 +1326,9 @@ function BulkSchedulePage() {
                   <button
                     type="button"
                     onClick={() => setIsRandomTimeMode(true)}
-                    className={`flex-1 sm:flex-initial py-1 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                       isRandomTimeMode
-                        ? "bg-card text-foreground shadow-sm"
+                        ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
@@ -925,77 +1337,53 @@ function BulkSchedulePage() {
                 </div>
               </div>
 
-              {/* Start Date & Batch Size is common to both modes */}
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="startDate"
-                    className="text-xs font-semibold text-muted-foreground"
-                  >
-                    Data de Início
-                  </Label>
-                  <Input
-                    type="date"
-                    id="startDate"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="h-10 bg-card w-full"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="batchSize"
-                    className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5"
-                  >
-                    <Layers className="size-3.5 text-primary shrink-0" /> Lote de Reels Simultâneos
-                  </Label>
-                  <Input
-                    type="number"
-                    id="batchSize"
-                    min={1}
-                    max={20}
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="h-10 bg-card w-full font-semibold"
-                  />
-                </div>
+              {/* Start Date */}
+              <div className="space-y-1.5">
+                <Label
+                  htmlFor="startDate"
+                  className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider"
+                >
+                  Data de Início
+                </Label>
+                <Input
+                  type="date"
+                  id="startDate"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="h-10 bg-card"
+                />
               </div>
 
+              {/* Mode Specific Configuration */}
               {!isRandomTimeMode ? (
-                <div className="space-y-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-muted-foreground">
-                      Adicionar Horário
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="time"
-                        value={newTime}
-                        onChange={(e) => setNewTime(e.target.value)}
-                        className="h-10 bg-card"
-                      />
-                      <Button
-                        type="button"
-                        onClick={handleAddTime}
-                        variant="secondary"
-                        className="h-10 px-3 cursor-pointer shrink-0"
-                      >
-                        <Plus className="size-4" /> Adicionar
-                      </Button>
-                    </div>
+                <div className="space-y-3">
+                  <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                    Horários de Postagem Fixos
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="time"
+                      value={newTime}
+                      onChange={(e) => setNewTime(e.target.value)}
+                      className="h-10 w-36 bg-card"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleAddTime}
+                      variant="outline"
+                      className="h-10 font-bold text-xs"
+                    >
+                      <Plus className="size-4 mr-1.5" /> Adicionar Horário
+                    </Button>
                   </div>
 
-                  {/* Added times list */}
                   {postingTimes.length > 0 ? (
-                    <div className="space-y-1">
-                      <Label className="text-xs font-semibold text-muted-foreground">
-                        Horários de Postagem Diária:
-                      </Label>
-                      <div className="flex flex-wrap gap-1.5 p-2 border border-border/30 rounded-xl bg-secondary/10">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2 pt-1">
                         {postingTimes.map((time) => (
                           <span
                             key={time}
-                            className="inline-flex items-center gap-1 text-xs font-bold bg-secondary border border-border/40 px-2.5 py-1 rounded-full"
+                            className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 text-primary px-2.5 py-1 rounded-lg text-xs font-bold shadow-sm"
                           >
                             <Clock className="size-3 text-primary shrink-0" />
                             {time}
@@ -1211,41 +1599,62 @@ function BulkSchedulePage() {
                   </div>
 
                   {/* Chronological Preview List */}
-                  <div className="max-h-[500px] overflow-y-auto pr-1.5 space-y-4">
+                  <div className="max-h-[550px] overflow-y-auto pr-1.5 space-y-4">
                     {Object.entries(slotsByDate).map(([date, dateSlots]) => (
                       <div key={date} className="space-y-2">
                         <h4 className="text-xs font-bold text-primary flex items-center gap-1.5 border-b border-border/30 pb-1 mt-3">
                           <CalendarIcon className="size-3.5" /> {date}
                         </h4>
-                        <div className="space-y-1.5 pl-2">
+                        <div className="space-y-2 pl-1">
                           {dateSlots.map((slot, index) => (
                             <div
                               key={index}
-                              className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-secondary/35 border border-border/25 gap-3 hover:bg-secondary/50 transition-colors"
+                              className="flex items-center justify-between text-xs py-2.5 px-3 rounded-xl bg-secondary/35 border border-border/25 gap-3 hover:bg-secondary/50 transition-colors"
                             >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-extrabold text-muted-foreground shrink-0">
+                              {/* Left: Time, Account & Cover Thumb */}
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <span className="font-extrabold text-muted-foreground shrink-0 text-[11px]">
                                   {slot.timeStr}
                                 </span>
-                                <span className="text-muted-foreground/50">•</span>
-                                <span
-                                  className="flex items-center gap-1.5 min-w-0 font-extrabold truncate"
-                                  style={{ color: slot.accountColor }}
-                                >
-                                  {slot.accountColor && (
+
+                                {/* Assigned Cover Thumbnail */}
+                                {slot.coverPreviewUrl ? (
+                                  <img
+                                    src={slot.coverPreviewUrl}
+                                    alt="Capa"
+                                    className="size-7 rounded-md object-cover ring-1 ring-border/50 shrink-0 shadow-sm"
+                                    title={`Capa: ${slot.coverName}`}
+                                  />
+                                ) : (
+                                  <div
+                                    className="size-7 rounded-md bg-secondary/80 grid place-items-center shrink-0 border border-border/40 text-muted-foreground"
+                                    title="Miniatura automática do vídeo"
+                                  >
+                                    <Video className="size-3.5" />
+                                  </div>
+                                )}
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5">
                                     <span
-                                      className="size-1.5 rounded-full shrink-0 ring-1 ring-white/10"
-                                      style={{ backgroundColor: slot.accountColor }}
-                                    />
-                                  )}
-                                  @{slot.accountUsername}
-                                </span>
+                                      className="font-extrabold truncate"
+                                      style={{ color: slot.accountColor }}
+                                    >
+                                      @{slot.accountUsername}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className="truncate text-muted-foreground/80 font-mono text-[10px] block"
+                                    title={slot.videoFileName}
+                                  >
+                                    {slot.videoFileName}
+                                  </span>
+                                </div>
                               </div>
-                              <span
-                                className="truncate max-w-[160px] text-muted-foreground/80 font-mono text-[10px]"
-                                title={slot.videoFileName}
-                              >
-                                {slot.videoFileName}
+
+                              {/* Right: Cover badge */}
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-background/80 border border-border/40 text-muted-foreground shrink-0 truncate max-w-[100px]">
+                                {slot.coverName}
                               </span>
                             </div>
                           ))}
