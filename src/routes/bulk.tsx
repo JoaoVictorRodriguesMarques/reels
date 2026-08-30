@@ -154,7 +154,7 @@ function BulkSchedulePage() {
 
   // Randomize state
   const [randomize, setRandomize] = useState(false);
-  const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
+  const [distributionMode, setDistributionMode] = useState<"normal" | "trial_only" | "both">("normal");
   const [cleanMetadata, setCleanMetadata] = useState(true);
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
@@ -730,20 +730,42 @@ function BulkSchedulePage() {
           // Construct date time slot in local time representation
           const scheduledDate = new Date(year, month - 1, day + dayIndex, hours, minutes, 0, 0);
 
-          // 1. Post normal
-          postsToInsert.push({
-            user_id: uid,
-            instagram_account_id: accId,
-            video_url: uploadedUrls[videoIdx],
-            cover_url: assignedCoverUrl,
-            caption,
-            scheduled_at: scheduledDate.toISOString(),
-            status: "pending",
-            is_trial: false,
-          });
-
-          // 2. Post teste para não-seguidores (se marcado)
-          if (postAsTrialAlso) {
+          // Post distribution logic based on distributionMode
+          if (distributionMode === "normal") {
+            postsToInsert.push({
+              user_id: uid,
+              instagram_account_id: accId,
+              video_url: uploadedUrls[videoIdx],
+              cover_url: assignedCoverUrl,
+              caption,
+              scheduled_at: scheduledDate.toISOString(),
+              status: "pending",
+              is_trial: false,
+            });
+          } else if (distributionMode === "trial_only") {
+            postsToInsert.push({
+              user_id: uid,
+              instagram_account_id: accId,
+              video_url: uploadedUrls[videoIdx],
+              cover_url: assignedCoverUrl,
+              caption,
+              scheduled_at: scheduledDate.toISOString(),
+              status: "pending",
+              is_trial: true,
+            });
+          } else if (distributionMode === "both") {
+            // Post 1: Normal
+            postsToInsert.push({
+              user_id: uid,
+              instagram_account_id: accId,
+              video_url: uploadedUrls[videoIdx],
+              cover_url: assignedCoverUrl,
+              caption,
+              scheduled_at: scheduledDate.toISOString(),
+              status: "pending",
+              is_trial: false,
+            });
+            // Post 2: Teste (Não-seguidores)
             postsToInsert.push({
               user_id: uid,
               instagram_account_id: accId,
@@ -1510,18 +1532,95 @@ function BulkSchedulePage() {
               </div>
             </div>
 
-            {/* Trial Reels Option */}
-            <div className="pt-4 border-t border-border/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <Label className="text-sm font-bold flex items-center gap-1.5 text-foreground">
-                  <span className="text-base">🧪</span> Postar também como Reels Teste (Não-seguidores)
+            {/* Distribution Mode Option (Normal, Trial Only, Both) */}
+            <div className="pt-4 border-t border-border/40 space-y-3">
+              <div>
+                <Label className="text-sm font-bold flex items-center gap-2 text-foreground">
+                  <Sparkles className="size-4 text-primary" /> Modo de Distribuição do Reel
                 </Label>
-                <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
-                  Gera 2 publicações para cada agendamento: o Reel normal no feed e a versão de teste entregue pela Meta exclusivamente para não-seguidores.
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Escolha como os vídeos serão entregues pela Meta para cada conta agendada.
                 </p>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <Switch checked={postAsTrialAlso} onCheckedChange={setPostAsTrialAlso} />
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Option 1: Normal Only */}
+                <button
+                  type="button"
+                  onClick={() => setDistributionMode("normal")}
+                  className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
+                    distributionMode === "normal"
+                      ? "border-primary bg-primary/10 shadow-sm"
+                      : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      🎬 Apenas Normal
+                    </span>
+                    {distributionMode === "normal" && (
+                      <CheckCircle2 className="size-4 text-primary shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Postagem tradicional entregue para seus seguidores e aba Reels.
+                  </p>
+                  <span className="text-[10px] font-mono text-muted-foreground block pt-1">
+                    1 post por agendamento
+                  </span>
+                </button>
+
+                {/* Option 2: Trial Only */}
+                <button
+                  type="button"
+                  onClick={() => setDistributionMode("trial_only")}
+                  className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
+                    distributionMode === "trial_only"
+                      ? "border-purple-500 bg-purple-500/10 shadow-sm"
+                      : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-purple-400 flex items-center gap-1.5">
+                      🧪 Apenas Teste
+                    </span>
+                    {distributionMode === "trial_only" && (
+                      <CheckCircle2 className="size-4 text-purple-400 shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Entregue exclusivamente para <strong>não-seguidores</strong> para teste de público.
+                  </p>
+                  <span className="text-[10px] font-mono text-purple-400/80 block pt-1">
+                    1 post por agendamento
+                  </span>
+                </button>
+
+                {/* Option 3: Normal + Trial */}
+                <button
+                  type="button"
+                  onClick={() => setDistributionMode("both")}
+                  className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
+                    distributionMode === "both"
+                      ? "border-emerald-500 bg-emerald-500/10 shadow-sm"
+                      : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                      ⚡ Normal + Teste
+                    </span>
+                    {distributionMode === "both" && (
+                      <CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Gera <strong>2 publicações</strong>: o Reel normal no feed + o Reel de teste.
+                  </p>
+                  <span className="text-[10px] font-mono text-emerald-400/80 block pt-1">
+                    2 posts por agendamento
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -1556,7 +1655,13 @@ function BulkSchedulePage() {
                   <Loader2 className="size-4 animate-spin mr-2" /> Agendando...
                 </>
               ) : (
-                `Agendar ${slots.length * (postAsTrialAlso ? 2 : 1)} Publicações${postAsTrialAlso ? " (Normais + Testes)" : ""}`
+                `Agendar ${slots.length * (distributionMode === "both" ? 2 : 1)} Publicações${
+                  distributionMode === "trial_only"
+                    ? " (Apenas Teste 🧪)"
+                    : distributionMode === "both"
+                      ? " (Normais + Testes ⚡)"
+                      : " (Normais 🎬)"
+                }`
               )}
             </Button>
           </form>

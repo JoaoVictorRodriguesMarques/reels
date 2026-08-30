@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Upload, Loader2, Video, ChevronDown, Instagram } from "lucide-react";
+import { Upload, Loader2, Video, ChevronDown, Instagram, CheckCircle2, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,7 @@ function SchedulePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
-  const [postAsTrialAlso, setPostAsTrialAlso] = useState(false);
+  const [distributionMode, setDistributionMode] = useState<"normal" | "trial_only" | "both">("normal");
   const [publishMode, setPublishMode] = useState<"now" | "schedule">(() => {
     const saved = localStorage.getItem("last_scheduled_publish_mode");
     return saved === "now" || saved === "schedule" ? saved : "now";
@@ -205,20 +205,41 @@ function SchedulePage() {
       const postsToInsert: any[] = [];
 
       accountIds.forEach((accId) => {
-        // 1. Post normal
-        postsToInsert.push({
-          user_id: uid,
-          instagram_account_id: accId,
-          video_url: videoUrl,
-          cover_url: coverUrl,
-          caption,
-          scheduled_at: scheduledDate,
-          status: "pending" as const,
-          is_trial: false,
-        });
-
-        // 2. Post teste para não-seguidores (se marcado)
-        if (postAsTrialAlso) {
+        if (distributionMode === "normal") {
+          postsToInsert.push({
+            user_id: uid,
+            instagram_account_id: accId,
+            video_url: videoUrl,
+            cover_url: coverUrl,
+            caption,
+            scheduled_at: scheduledDate,
+            status: "pending" as const,
+            is_trial: false,
+          });
+        } else if (distributionMode === "trial_only") {
+          postsToInsert.push({
+            user_id: uid,
+            instagram_account_id: accId,
+            video_url: videoUrl,
+            cover_url: coverUrl,
+            caption,
+            scheduled_at: scheduledDate,
+            status: "pending" as const,
+            is_trial: true,
+          });
+        } else if (distributionMode === "both") {
+          // Post 1: Normal
+          postsToInsert.push({
+            user_id: uid,
+            instagram_account_id: accId,
+            video_url: videoUrl,
+            cover_url: coverUrl,
+            caption,
+            scheduled_at: scheduledDate,
+            status: "pending" as const,
+            is_trial: false,
+          });
+          // Post 2: Teste (Não-seguidores)
           postsToInsert.push({
             user_id: uid,
             instagram_account_id: accId,
@@ -519,29 +540,86 @@ function SchedulePage() {
             </div>
           )}
 
-          {/* Trial Reels Option */}
-          <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-2">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <span className="text-xl shrink-0 mt-0.5">🧪</span>
-                <div>
-                  <Label
-                    htmlFor="trial-reels-toggle"
-                    className="text-sm font-semibold cursor-pointer text-foreground"
-                  >
-                    Postar também como Reels Teste (Não-seguidores)
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                    Publica o Reel normal e também uma versão de teste entregue pela Meta exclusivamente para quem ainda não segue o perfil.
-                  </p>
+          {/* Distribution Mode Option (Normal, Trial Only, Both) */}
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-sm font-bold flex items-center gap-2 text-foreground">
+                <Sparkles className="size-4 text-primary" /> Modo de Distribuição do Reel
+              </Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Escolha como seu vídeo será distribuído pela Meta no Instagram.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {/* Option 1: Normal Only */}
+              <button
+                type="button"
+                onClick={() => setDistributionMode("normal")}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-1.5 ${
+                  distributionMode === "normal"
+                    ? "border-primary bg-primary/10 shadow-sm"
+                    : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1">
+                    🎬 Apenas Normal
+                  </span>
+                  {distributionMode === "normal" && (
+                    <CheckCircle2 className="size-3.5 text-primary shrink-0" />
+                  )}
                 </div>
-              </div>
-              <Switch
-                id="trial-reels-toggle"
-                checked={postAsTrialAlso}
-                onCheckedChange={setPostAsTrialAlso}
-                className="shrink-0"
-              />
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  Postagem tradicional no feed/aba Reels para seguidores e exploração.
+                </p>
+              </button>
+
+              {/* Option 2: Trial Only */}
+              <button
+                type="button"
+                onClick={() => setDistributionMode("trial_only")}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-1.5 ${
+                  distributionMode === "trial_only"
+                    ? "border-purple-500 bg-purple-500/10 shadow-sm"
+                    : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-400 flex items-center gap-1">
+                    🧪 Apenas Teste
+                  </span>
+                  {distributionMode === "trial_only" && (
+                    <CheckCircle2 className="size-3.5 text-purple-400 shrink-0" />
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  Entregue exclusivamente para <strong>não-seguidores</strong> para testar engajamento.
+                </p>
+              </button>
+
+              {/* Option 3: Normal + Trial */}
+              <button
+                type="button"
+                onClick={() => setDistributionMode("both")}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-1.5 ${
+                  distributionMode === "both"
+                    ? "border-emerald-500 bg-emerald-500/10 shadow-sm"
+                    : "border-border/60 bg-secondary/15 hover:bg-secondary/30"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                    ⚡ Normal + Teste
+                  </span>
+                  {distributionMode === "both" && (
+                    <CheckCircle2 className="size-3.5 text-emerald-400 shrink-0" />
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  Gera <strong>2 publicações</strong>: normal no perfil + teste para não-seguidores.
+                </p>
+              </button>
             </div>
           </div>
 
