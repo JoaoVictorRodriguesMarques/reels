@@ -164,6 +164,7 @@ function BulkSchedulePage() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [batchSize, setBatchSize] = useState(1);
+  const [slotSpacingMinutes, setSlotSpacingMinutes] = useState(2);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -476,15 +477,25 @@ function BulkSchedulePage() {
         let dayIndex = 0;
 
         const slotIndex = Math.floor(i / batchSize);
+        const withinSlotIndex = i % batchSize;
+        const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
 
         if (isRandomTimeMode) {
           dayIndex = Math.floor(slotIndex / randomCountPerDay);
           const timeIndex = slotIndex % randomCountPerDay;
-          timeStr = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
+          const baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
+          const totalMin = parseTimeToMinutes(baseTime) + offsetMinutes;
+          const h = Math.floor(totalMin / 60) % 24;
+          const m = totalMin % 60;
+          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         } else {
           dayIndex = Math.floor(slotIndex / sortedTimes.length);
           const timeIndex = slotIndex % sortedTimes.length;
-          timeStr = sortedTimes[timeIndex];
+          const baseTime = sortedTimes[timeIndex];
+          const totalMin = parseTimeToMinutes(baseTime) + offsetMinutes;
+          const h = Math.floor(totalMin / 60) % 24;
+          const m = totalMin % 60;
+          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         }
 
         const slotDate = new Date(year, month - 1, day + dayIndex);
@@ -711,20 +722,22 @@ function BulkSchedulePage() {
           let minutes = 0;
 
           const slotIndex = Math.floor(i / batchSize);
+          const withinSlotIndex = i % batchSize;
+          const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
 
           if (isRandomTimeMode) {
             dayIndex = Math.floor(slotIndex / randomCountPerDay);
             const timeIndex = slotIndex % randomCountPerDay;
             const timeStr = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
-            const [h, m] = timeStr.split(":").map(Number);
-            hours = h;
-            minutes = m;
+            const totalMin = parseTimeToMinutes(timeStr) + offsetMinutes;
+            hours = Math.floor(totalMin / 60) % 24;
+            minutes = totalMin % 60;
           } else {
             dayIndex = Math.floor(slotIndex / sortedTimes.length);
             const timeIndex = slotIndex % sortedTimes.length;
-            const [h, m] = sortedTimes[timeIndex].split(":").map(Number);
-            hours = h;
-            minutes = m;
+            const totalMin = parseTimeToMinutes(sortedTimes[timeIndex]) + offsetMinutes;
+            hours = Math.floor(totalMin / 60) % 24;
+            minutes = totalMin % 60;
           }
 
           // Construct date time slot in local time representation
@@ -1503,6 +1516,109 @@ function BulkSchedulePage() {
                   </div>
                 </div>
               )}
+
+              {/* Quantity of videos per time slot (Container / Batch Size) */}
+              <div className="space-y-3 p-4 rounded-xl border border-border/60 bg-secondary/15">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Layers className="size-4 text-primary" /> Quantidade de Vídeos por Horário (Container / Lote)
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Defina quantos vídeos você quer que sejam postados em cada um dos horários configurados.
+                    </p>
+                  </div>
+
+                  {/* Free custom number input with +/- controls */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center bg-card border border-border/80 rounded-lg p-0.5 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => setBatchSize((prev) => Math.max(1, prev - 1))}
+                        className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={batchSize}
+                        onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-16 h-8 text-center font-extrabold text-sm border-0 bg-transparent focus-visible:ring-0 p-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setBatchSize((prev) => prev + 1)}
+                        className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <span className="text-xs font-semibold text-muted-foreground">vídeos / horário</span>
+                  </div>
+                </div>
+
+                {/* Quick preset buttons */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mr-1">
+                    Atalhos:
+                  </span>
+                  {[1, 2, 3, 4, 5, 10, 20].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => setBatchSize(num)}
+                      className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all cursor-pointer border ${
+                        batchSize === num
+                          ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                          : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary/40"
+                      }`}
+                    >
+                      {num} {num === 1 ? "vídeo" : "vídeos"}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Spacing option between videos in the same slot */}
+                {batchSize > 1 && (
+                  <div className="pt-2 border-t border-border/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      Intervalo de segurança entre vídeos do mesmo horário:
+                    </span>
+                    <select
+                      value={slotSpacingMinutes}
+                      onChange={(e) => setSlotSpacingMinutes(Number(e.target.value))}
+                      className="bg-card border border-border/60 rounded-lg px-2.5 py-1 text-xs font-semibold text-foreground cursor-pointer"
+                    >
+                      <option value={0}>No mesmo instante (0 min)</option>
+                      <option value={1}>1 minuto de intervalo</option>
+                      <option value={2}>2 minutos de intervalo (Recomendado)</option>
+                      <option value={5}>5 minutos de intervalo</option>
+                      <option value={10}>10 minutos de intervalo</option>
+                      <option value={15}>15 minutos de intervalo</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Dynamic Live Explanation Alert */}
+                {videoFiles.length > 0 && (
+                  <div className="p-2.5 rounded-lg bg-primary/[0.06] border border-primary/20 text-[11px] text-muted-foreground leading-relaxed flex items-center gap-2">
+                    <Info className="size-4 text-primary shrink-0" />
+                    <span>
+                      Com <strong>{videoFiles.length} vídeos</strong> e <strong>{batchSize} {batchSize === 1 ? "vídeo" : "vídeos"} por horário</strong> em{" "}
+                      <strong>{isRandomTimeMode ? `${randomCountPerDay} horários/dia` : `${postingTimes.length} ${postingTimes.length === 1 ? "horário" : "horários"}/dia`}</strong>: cada conta postará{" "}
+                      <strong>
+                        {batchSize * (isRandomTimeMode ? randomCountPerDay : postingTimes.length)} vídeos por dia
+                      </strong>. Todo o lote será concluído em{" "}
+                      <strong>
+                        {Math.ceil(videoFiles.length / (batchSize * (isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length))))}{" "}
+                        {Math.ceil(videoFiles.length / (batchSize * (isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length)))) === 1 ? "dia" : "dias"}
+                      </strong>.
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Randomize Option */}
