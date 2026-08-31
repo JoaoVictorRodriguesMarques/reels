@@ -239,12 +239,33 @@ function DashboardPage() {
     setSyncing(true);
     toast.info("Consultando Meta Graph API para sincronizar métricas e diagnóstico...");
     try {
-      const { data, error } = await supabase.functions.invoke("sync-insights");
-      if (error) throw error;
+      let resultData: any = null;
 
-      toast.success(
-        `Sincronização concluída! ${data?.accounts_synced || accounts.length} contas atualizadas.`,
-      );
+      try {
+        const { data, error } = await supabase.functions.invoke("sync-insights");
+        if (error) throw error;
+        resultData = data;
+      } catch (invokeErr: any) {
+        console.warn("supabase.functions.invoke error, trying direct endpoint fetch...", invokeErr);
+        const fallbackRes = await fetch("https://mbvjnqaufjykgpjkudju.supabase.co/functions/v1/sync-insights", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1idmpucWF1Zmp5a2dwamt1ZGp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2ODEyNjgsImV4cCI6MjEwMzI1NzI2OH0.DoGk9MP_bgMg0ewqy3ftJFRc67wUwE0EFmukMbi8HKo",
+            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1idmpucWF1Zmp5a2dwamt1ZGp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2ODEyNjgsImV4cCI6MjEwMzI1NzI2OH0.DoGk9MP_bgMg0ewqy3ftJFRc67wUwE0EFmukMbi8HKo",
+          },
+          body: JSON.stringify({}),
+        });
+
+        if (!fallbackRes.ok) {
+          const errText = await fallbackRes.text();
+          throw new Error(`Falha na resposta do servidor (${fallbackRes.status}): ${errText}`);
+        }
+        resultData = await fallbackRes.json();
+      }
+
+      const count = resultData?.accounts_synced || accounts.length;
+      toast.success(`Sincronização concluída! ${count} contas atualizadas.`);
       await loadData();
     } catch (err: any) {
       console.error("Error syncing insights:", err);

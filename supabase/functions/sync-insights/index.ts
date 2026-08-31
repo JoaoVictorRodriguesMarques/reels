@@ -42,52 +42,55 @@ Deno.serve(async (req: Request) => {
 
     if (!accounts || accounts.length === 0) {
       return new Response(
-        JSON.stringify({ success: true, message: "No accounts to sync.", accounts_synced: 0 }),
+        JSON.stringify({ success: true, message: "Nenhuma conta para sincronizar.", accounts_synced: 0, results: [] }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    const results: any[] = [];
     const todayDate = new Date().toISOString().split("T")[0];
+    const nowIso = new Date().toISOString();
 
-    for (const acc of accounts) {
-      console.log(`[Sync-Insights] Processing @${acc.username}...`);
-      const nowIso = new Date().toISOString();
-
+    // Helper to process a single account with high speed field expansion
+    async function syncSingleAccount(acc: any) {
+      console.log(`[Sync-Insights] Syncing @${acc.username}...`);
       try {
-        const isIgToken = acc.access_token && (acc.access_token.startsWith("IGAA") || acc.access_token.startsWith("IG"));
+        if (!acc.access_token) {
+          throw new Error("Token de acesso ausente.");
+        }
+
+        const isIgToken = acc.access_token.startsWith("IGAA") || acc.access_token.startsWith("IG");
         const baseUrl = isIgToken ? "https://graph.instagram.com/v21.0" : "https://graph.facebook.com/v21.0";
 
-        // 1. Fetch Profile & Check Health
-        let profileUrl = `${baseUrl}/me?fields=id,username,account_type,media_count,profile_picture_url&access_token=${acc.access_token}`;
+        // 1. Fetch Profile & Check Health (in parallel with media)
+        let profileUrl = `${baseUrl}/me?fields=id,username,name,followers_count,follows_count,media_count,profile_picture_url&access_token=${acc.access_token}`;
         if (!isIgToken) {
           profileUrl = `${baseUrl}/${acc.instagram_user_id}?fields=id,username,name,followers_count,media_count,profile_picture_url&access_token=${acc.access_token}`;
         }
 
-        let profileRes = await fetch(profileUrl);
-
-        // Fallback: If graph.facebook.com failed with OAuthException, try graph.instagram.com
-        if (!profileRes.ok && !isIgToken) {
-          const fallbackUrl = `https://graph.instagram.com/v21.0/me?fields=id,username,account_type,media_count,profile_picture_url&access_token=${acc.access_token}`;
-          const fallbackRes = await fetch(fallbackUrl);
-          if (fallbackRes.ok) {
-            profileRes = fallbackRes;
-          }
+        // 2. Fetch Media WITH Nested Insights (1 single API call instead of 25 calls!)
+        let mediaUrl = `${baseUrl}/me/media?fields=id,caption,media_type,timestamp,like_count,comments_count,insights.metric(views,reach,total_interactions)&limit=15&access_token=${acc.access_token}`;
+        if (!isIgToken) {
+          mediaUrl = `${baseUrl}/${acc.instagram_user_id}/media?fields=id,caption,media_type,timestamp,like_count,comments_count,insights.metric(views,reach,total_interactions)&limit=15&access_token=${acc.access_token}`;
         }
+
+        const [profileRes, mediaRes] = await Promise.all([
+          fetch(profileUrl),
+          fetch(mediaUrl),
+        ]);
 
         if (!profileRes.ok) {
           const errData = await profileRes.json().catch(() => ({}));
           const errCode = errData.error?.code;
           const errMsg = errData.error?.message || "Erro de autenticação com a Meta.";
 
-          console.warn(`[Sync-Insights] Error for @${acc.username}:`, errData);
-
           let healthStatus = "warning";
           let healthReason = errMsg;
+          let tokenInvalid = false;
 
           if (errCode === 190) {
             healthStatus = "token_expired";
             healthReason = "Token de acesso expirado. Reconecte a conta no painel.";
+            tokenInvalid = true;
           } else if (errCode === 200 || errCode === 368) {
             healthStatus = "restricted";
             healthReason = "Restrição temporária da Meta (API access blocked). Aguarde a liberação.";
@@ -98,18 +101,18 @@ Deno.serve(async (req: Request) => {
             .update({
               health_status: healthStatus,
               health_reason: healthReason,
+              token_invalid: tokenInvalid,
               last_health_check_at: nowIso,
             })
             .eq("id", acc.id);
 
-          results.push({
+          return {
             id: acc.id,
             username: acc.username,
             status: "error",
             health_status: healthStatus,
             error: healthReason,
-          });
-          continue;
+          };
         }
 
         const profileData = await profileRes.json();
@@ -117,19 +120,12 @@ Deno.serve(async (req: Request) => {
         const mediaCount = profileData.media_count || 0;
         const profilePictureUrl = profileData.profile_picture_url || null;
 
-        // 2. Fetch Media and Insights
         let totalViews = 0;
         let totalReach = 0;
         let totalLikes = 0;
         let totalComments = 0;
         let totalInteractions = 0;
 
-        let mediaListUrl = `${baseUrl}/me/media?fields=id,caption,media_type,timestamp,like_count,comments_count&limit=25&access_token=${acc.access_token}`;
-        if (!isIgToken) {
-          mediaListUrl = `${baseUrl}/${acc.instagram_user_id}/media?fields=id,caption,media_type,timestamp,like_count,comments_count&limit=25&access_token=${acc.access_token}`;
-        }
-
-        const mediaRes = await fetch(mediaListUrl);
         if (mediaRes.ok) {
           const mediaData = await mediaRes.json();
           const mediaList = mediaData.data || [];
@@ -144,25 +140,14 @@ Deno.serve(async (req: Request) => {
             let reach = 0;
             let interactions = likes + comments;
 
-            // Fetch individual media insights
-            try {
-              const insightsRes = await fetch(
-                `https://graph.instagram.com/v21.0/${item.id}/insights?metric=views,reach,saved,shares,total_interactions&access_token=${acc.access_token}`,
-              );
-
-              if (insightsRes.ok) {
-                const insightsData = await insightsRes.json();
-                if (insightsData.data && Array.isArray(insightsData.data)) {
-                  for (const metric of insightsData.data) {
-                    const val = metric.values?.[0]?.value || 0;
-                    if (metric.name === "views") views = val;
-                    if (metric.name === "reach") reach = val;
-                    if (metric.name === "total_interactions") interactions = val;
-                  }
-                }
+            // Extract nested insights
+            if (item.insights && Array.isArray(item.insights.data)) {
+              for (const metric of item.insights.data) {
+                const val = metric.values?.[0]?.value || 0;
+                if (metric.name === "views") views = val;
+                if (metric.name === "reach") reach = val;
+                if (metric.name === "total_interactions") interactions = val;
               }
-            } catch (_) {
-              // Insights fetch failed for single media, continue
             }
 
             totalViews += views > 0 ? views : (likes + comments);
@@ -189,7 +174,7 @@ Deno.serve(async (req: Request) => {
         const baseCount = followersCount > 0 ? followersCount : (mediaCount > 0 ? mediaCount * 10 : 100);
         const engagementRate = Number(((totalInteractions / baseCount) * 100).toFixed(2));
 
-        // 3. Update instagram_accounts table
+        // Update instagram_accounts
         await supabase
           .from("instagram_accounts")
           .update({
@@ -203,12 +188,13 @@ Deno.serve(async (req: Request) => {
             profile_picture_url: profilePictureUrl,
             health_status: "healthy",
             health_reason: null,
+            token_invalid: false,
             last_health_check_at: nowIso,
             metrics_updated_at: nowIso,
           })
           .eq("id", acc.id);
 
-        // 4. Record Daily Metrics Snapshot
+        // Record Daily Snapshot
         try {
           await supabase.from("account_daily_metrics").upsert(
             {
@@ -223,7 +209,7 @@ Deno.serve(async (req: Request) => {
           );
         } catch (_) {}
 
-        results.push({
+        return {
           id: acc.id,
           username: acc.username,
           status: "success",
@@ -233,17 +219,26 @@ Deno.serve(async (req: Request) => {
           likes: totalLikes,
           media_count: mediaCount,
           engagement_rate: engagementRate,
-        });
+        };
       } catch (err: any) {
         console.error(`[Sync-Insights] Exception for @${acc.username}:`, err);
-        results.push({
+        return {
           id: acc.id,
           username: acc.username,
           status: "error",
           health_status: "warning",
           error: err.message,
-        });
+        };
       }
+    }
+
+    // Process accounts in parallel chunks of 5
+    const results: any[] = [];
+    const chunkSize = 5;
+    for (let i = 0; i < accounts.length; i += chunkSize) {
+      const chunk = accounts.slice(i, i + chunkSize);
+      const chunkResults = await Promise.all(chunk.map((acc) => syncSingleAccount(acc)));
+      results.push(...chunkResults);
     }
 
     return new Response(
