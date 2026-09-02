@@ -1975,22 +1975,43 @@ function BulkSchedulePage() {
                 )}
 
                 {/* Dynamic Live Explanation Alert */}
-                {videoFiles.length > 0 && (
-                  <div className="p-2.5 rounded-lg bg-primary/[0.06] border border-primary/20 text-[11px] text-muted-foreground leading-relaxed flex items-center gap-2">
-                    <Info className="size-4 text-primary shrink-0" />
-                    <span>
-                      Com <strong>{videoFiles.length} vídeos</strong> e <strong>{batchSize} {batchSize === 1 ? "vídeo" : "vídeos"} por horário</strong> em{" "}
-                      <strong>{isRandomTimeMode ? `${randomCountPerDay} horários/dia` : `${postingTimes.length} ${postingTimes.length === 1 ? "horário" : "horários"}/dia`}</strong>: cada conta postará{" "}
-                      <strong>
-                        {batchSize * (isRandomTimeMode ? randomCountPerDay : postingTimes.length)} vídeos por dia
-                      </strong>. Todo o lote será concluído em{" "}
-                      <strong>
-                        {Math.ceil(videoFiles.length / (batchSize * (isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length))))}{" "}
-                        {Math.ceil(videoFiles.length / (batchSize * (isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length)))) === 1 ? "dia" : "dias"}
-                      </strong>.
-                    </span>
-                  </div>
-                )}
+                {videoFiles.length > 0 && (() => {
+                  const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length);
+                  if (isRandomBatchSize && selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]]) {
+                    const burstList = stableBurstSizes[selectedAccounts[0]];
+                    const totalBursts = burstList.length;
+                    const totalDays = Math.max(1, Math.ceil(totalBursts / timesPerDay));
+                    const avgPerDay = Math.round(videoFiles.length / totalDays);
+                    return (
+                      <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 leading-relaxed flex items-center gap-2">
+                        <Info className="size-4 text-amber-400 shrink-0" />
+                        <span>
+                          Com <strong>{videoFiles.length} vídeos</strong> divididos em <strong>{totalBursts} rajadas aleatórias</strong> (de {minBatchSize} a {maxBatchSize} vídeos) em{" "}
+                          <strong>{timesPerDay} {timesPerDay === 1 ? "horário/dia" : "horários/dia"}</strong>: cada conta postará em média{" "}
+                          <strong>~{avgPerDay} vídeos por dia</strong>. Todo o lote será concluído em{" "}
+                          <strong>
+                            {totalDays} {totalDays === 1 ? "dia" : "dias"}
+                          </strong>.
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  const totalDays = Math.ceil(videoFiles.length / (batchSize * timesPerDay));
+                  return (
+                    <div className="p-2.5 rounded-lg bg-primary/[0.06] border border-primary/20 text-[11px] text-muted-foreground leading-relaxed flex items-center gap-2">
+                      <Info className="size-4 text-primary shrink-0" />
+                      <span>
+                        Com <strong>{videoFiles.length} vídeos</strong> e <strong>{batchSize} {batchSize === 1 ? "vídeo" : "vídeos"} por horário</strong> em{" "}
+                        <strong>{timesPerDay} {timesPerDay === 1 ? "horário/dia" : "horários/dia"}</strong>: cada conta postará{" "}
+                        <strong>{batchSize * timesPerDay} vídeos por dia</strong>. Todo o lote será concluído em{" "}
+                        <strong>
+                          {totalDays} {totalDays === 1 ? "dia" : "dias"}
+                        </strong>.
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
