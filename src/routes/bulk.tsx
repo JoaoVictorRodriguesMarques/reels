@@ -1898,20 +1898,59 @@ function BulkSchedulePage() {
                     </div>
 
                     {/* Dynamic summary of generated bursts */}
-                    {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (
-                      <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-xs text-amber-300/90 leading-relaxed flex items-center gap-2">
-                        <Sparkles className="size-4 text-amber-400 shrink-0" />
-                        <span>
-                          Rajadas sorteadas:{" "}
-                          <strong>
-                            {stableBurstSizes[selectedAccounts[0]]
-                              .map((sz, idx) => `${sz} vídeos (${idx + 1}º horário)`)
-                              .join(" → ")}
-                          </strong>
-                          . (Total: {videoFiles.length} vídeos)
-                        </span>
-                      </div>
-                    )}
+                    {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (() => {
+                      const bursts = stableBurstSizes[selectedAccounts[0]];
+                      const sortedTimes = [...postingTimes].sort();
+                      const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length);
+                      const totalDays = Math.max(1, Math.ceil(bursts.length / timesPerDay));
+
+                      return (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2 text-xs">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-amber-400 font-bold">
+                            <span className="flex items-center gap-1.5">
+                              <Sparkles className="size-4 shrink-0" />
+                              {bursts.length} rajadas nos seus {timesPerDay} {timesPerDay === 1 ? "horário diário" : "horários diários"} ({totalDays} {totalDays === 1 ? "dia" : "dias"} no total):
+                            </span>
+                            <span className="text-[11px] font-mono font-bold text-amber-300">
+                              Total: {videoFiles.length} vídeos
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-1">
+                            {Array.from({ length: totalDays }, (_, dayIdx) => {
+                              const dayBursts = bursts.slice(dayIdx * timesPerDay, (dayIdx + 1) * timesPerDay);
+                              const dayTotal = dayBursts.reduce((a, b) => a + b, 0);
+
+                              return (
+                                <div key={dayIdx} className="bg-card/70 border border-border/60 rounded-lg p-2 space-y-1.5 shadow-sm">
+                                  <div className="flex items-center justify-between text-[11px] font-bold text-foreground border-b border-border/40 pb-1">
+                                    <span>Dia {dayIdx + 1}</span>
+                                    <span className="text-amber-400 font-mono text-[10px] font-bold">
+                                      {dayTotal} {dayTotal === 1 ? "vídeo" : "vídeos"}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1 text-[11px]">
+                                    {dayBursts.map((sz, bIdx) => {
+                                      const timeLabel = isRandomTimeMode
+                                        ? `Horário ${bIdx + 1}`
+                                        : sortedTimes[bIdx] || `Horário ${bIdx + 1}`;
+                                      return (
+                                        <div key={bIdx} className="flex items-center justify-between text-muted-foreground">
+                                          <span className="font-mono font-bold text-foreground/90">{timeLabel}:</span>
+                                          <span className="font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded text-[10px]">
+                                            {sz} vídeos
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
