@@ -226,6 +226,15 @@ Deno.serve(async (req: Request) => {
 
     for (const post of posts) {
       results.processed++;
+
+      // Exact burst timing: If post is scheduled a few seconds ahead (lookahead window), wait for the exact moment
+      const scheduledTime = new Date(post.scheduled_at).getTime();
+      const delayMs = scheduledTime - Date.now();
+      if (delayMs > 500 && delayMs <= 60000) {
+        console.log(`[${post.id}] Precise burst cadence: waiting ${Math.round(delayMs / 1000)}s before publishing...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+
       const ig = {
         instagram_user_id: (post as any).instagram_user_id,
         access_token: (post as any).access_token,

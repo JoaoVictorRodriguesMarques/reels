@@ -165,6 +165,9 @@ function BulkSchedulePage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [batchSize, setBatchSize] = useState(1);
   const [slotSpacingMinutes, setSlotSpacingMinutes] = useState(2);
+  const [isBurstRandomMode, setIsBurstRandomMode] = useState(true);
+  const [burstTrigger, setBurstTrigger] = useState(0);
+  const [stableBurstDelays, setStableBurstDelays] = useState<Record<string, number[]>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -282,6 +285,43 @@ function BulkSchedulePage() {
     randomTrigger,
     batchSize,
   ]);
+
+  // Generate organic random burst delays per account in burst mode
+  useEffect(() => {
+    if (!isBurstRandomMode || selectedAccounts.length === 0 || videoFiles.length === 0) {
+      return;
+    }
+
+    const newDelays: Record<string, number[]> = {};
+    selectedAccounts.forEach((accId) => {
+      const delays: number[] = [];
+      // Initial second offset for the first video (between 10s and 45s) so it doesn't post at exact :00
+      delays.push(Math.floor(Math.random() * 35) + 10);
+
+      // Subsequent videos have organic delays (+10s to +105s, weighted around 35-45s)
+      for (let i = 1; i < videoFiles.length; i++) {
+        const rand = Math.random();
+        let delta = 36;
+        if (rand < 0.15) {
+          // Quick burst: 11s - 22s (e.g. 11s, 19s)
+          delta = Math.floor(Math.random() * 12) + 11;
+        } else if (rand < 0.65) {
+          // Typical burst: 26s - 49s (e.g. 28s, 36s, 48s)
+          delta = Math.floor(Math.random() * 24) + 26;
+        } else if (rand < 0.88) {
+          // Medium-long burst: 50s - 75s (e.g. 62s)
+          delta = Math.floor(Math.random() * 26) + 50;
+        } else {
+          // Occasional pause: 80s - 110s (e.g. 104s)
+          delta = Math.floor(Math.random() * 31) + 80;
+        }
+        delays.push(delta);
+      }
+      newDelays[accId] = delays;
+    });
+
+    setStableBurstDelays(newDelays);
+  }, [isBurstRandomMode, selectedAccounts, videoFiles.length, burstTrigger]);
 
   const handleReshuffle = () => {
     const newOrders: Record<string, number[]> = {};
@@ -447,6 +487,7 @@ function BulkSchedulePage() {
     videoFileName: string;
     coverPreviewUrl: string | null;
     coverName: string;
+    burstDelta?: number;
   }
 
   const getScheduleSlots = (): ScheduleSlot[] => {
@@ -475,24 +516,42 @@ function BulkSchedulePage() {
 
         let timeStr = "";
         let dayIndex = 0;
+        let burstDelta: number | undefined = undefined;
 
         const slotIndex = Math.floor(i / batchSize);
         const withinSlotIndex = i % batchSize;
-        const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
 
+        let baseTime = "12:00";
         if (isRandomTimeMode) {
           dayIndex = Math.floor(slotIndex / randomCountPerDay);
           const timeIndex = slotIndex % randomCountPerDay;
-          const baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
-          const totalMin = parseTimeToMinutes(baseTime) + offsetMinutes;
-          const h = Math.floor(totalMin / 60) % 24;
-          const m = totalMin % 60;
-          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
         } else {
           dayIndex = Math.floor(slotIndex / sortedTimes.length);
           const timeIndex = slotIndex % sortedTimes.length;
-          const baseTime = sortedTimes[timeIndex];
-          const totalMin = parseTimeToMinutes(baseTime) + offsetMinutes;
+          baseTime = sortedTimes[timeIndex];
+        }
+
+        const baseMin = parseTimeToMinutes(baseTime);
+
+        if (isBurstRandomMode) {
+          const accountDelays = stableBurstDelays[accId] || [];
+          let cumulativeSec = accountDelays[0] || 15;
+          for (let k = 1; k <= withinSlotIndex; k++) {
+            const d = accountDelays[k] || 36;
+            cumulativeSec += d;
+            if (k === withinSlotIndex) {
+              burstDelta = d;
+            }
+          }
+          const totalSec = baseMin * 60 + cumulativeSec;
+          const h = Math.floor(totalSec / 3600) % 24;
+          const m = Math.floor((totalSec % 3600) / 60);
+          const s = totalSec % 60;
+          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+        } else {
+          const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
+          const totalMin = baseMin + offsetMinutes;
           const h = Math.floor(totalMin / 60) % 24;
           const m = totalMin % 60;
           timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
@@ -515,6 +574,7 @@ function BulkSchedulePage() {
           videoFileName: videoFiles[videoIdx].name,
           coverPreviewUrl: coverInfo.previewUrl,
           coverName: coverInfo.name,
+          burstDelta,
         });
       });
     });
@@ -720,28 +780,44 @@ function BulkSchedulePage() {
           let dayIndex = 0;
           let hours = 12;
           let minutes = 0;
+          let seconds = 0;
 
           const slotIndex = Math.floor(i / batchSize);
           const withinSlotIndex = i % batchSize;
-          const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
 
+          let baseTime = "12:00";
           if (isRandomTimeMode) {
             dayIndex = Math.floor(slotIndex / randomCountPerDay);
             const timeIndex = slotIndex % randomCountPerDay;
-            const timeStr = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
-            const totalMin = parseTimeToMinutes(timeStr) + offsetMinutes;
-            hours = Math.floor(totalMin / 60) % 24;
-            minutes = totalMin % 60;
+            baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
           } else {
             dayIndex = Math.floor(slotIndex / sortedTimes.length);
             const timeIndex = slotIndex % sortedTimes.length;
-            const totalMin = parseTimeToMinutes(sortedTimes[timeIndex]) + offsetMinutes;
-            hours = Math.floor(totalMin / 60) % 24;
-            minutes = totalMin % 60;
+            baseTime = sortedTimes[timeIndex];
           }
 
-          // Construct date time slot in local time representation
-          const scheduledDate = new Date(year, month - 1, day + dayIndex, hours, minutes, 0, 0);
+          const baseMin = parseTimeToMinutes(baseTime);
+
+          if (isBurstRandomMode) {
+            const accountDelays = stableBurstDelays[accId] || [];
+            let cumulativeSec = accountDelays[0] || 15;
+            for (let k = 1; k <= withinSlotIndex; k++) {
+              cumulativeSec += accountDelays[k] || 36;
+            }
+            const totalSec = baseMin * 60 + cumulativeSec;
+            hours = Math.floor(totalSec / 3600) % 24;
+            minutes = Math.floor((totalSec % 3600) / 60);
+            seconds = totalSec % 60;
+          } else {
+            const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
+            const totalMin = baseMin + offsetMinutes;
+            hours = Math.floor(totalMin / 60) % 24;
+            minutes = totalMin % 60;
+            seconds = 0;
+          }
+
+          // Construct date time slot in local time representation with exact seconds
+          const scheduledDate = new Date(year, month - 1, day + dayIndex, hours, minutes, seconds, 0);
 
           // Post distribution logic based on distributionMode
           if (distributionMode === "normal") {
@@ -1580,11 +1656,49 @@ function BulkSchedulePage() {
                   ))}
                 </div>
 
-                {/* Spacing option between videos in the same slot */}
-                {batchSize > 1 && (
+                {/* Viral Burst Random Delay Switch */}
+                <div className="pt-3 border-t border-border/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5 cursor-pointer">
+                        <Sparkles className="size-3.5 text-amber-400" />
+                        🔥 Modo Rajada Viral (Intervalos Aleatórios Anti-Spam)
+                      </Label>
+                      <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                        Estratégia Viral
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed max-w-lg">
+                      Espaça os vídeos com intervalos imprevisíveis em segundos (+36s, +48s, +19s, +62s...), simulando ação 100% humana para blindar suas contas contra detecção da Meta.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isBurstRandomMode && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setBurstTrigger((p) => p + 1);
+                          toast.success("Novos intervalos aleatórios sorteados!");
+                        }}
+                        className="text-xs h-8 gap-1.5 font-bold cursor-pointer border-amber-500/30 hover:bg-amber-500/10 text-amber-400"
+                      >
+                        <Shuffle className="size-3 text-amber-400" /> Sortear Novos
+                      </Button>
+                    )}
+                    <Switch
+                      checked={isBurstRandomMode}
+                      onCheckedChange={setIsBurstRandomMode}
+                    />
+                  </div>
+                </div>
+
+                {/* Spacing option between videos in the same slot (when burst random is OFF) */}
+                {batchSize > 1 && !isBurstRandomMode && (
                   <div className="pt-2 border-t border-border/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                     <span className="text-muted-foreground">
-                      Intervalo de segurança entre vídeos do mesmo horário:
+                      Intervalo de segurança regular entre vídeos do mesmo horário:
                     </span>
                     <select
                       value={slotSpacingMinutes}
@@ -1593,7 +1707,7 @@ function BulkSchedulePage() {
                     >
                       <option value={0}>No mesmo instante (0 min)</option>
                       <option value={1}>1 minuto de intervalo</option>
-                      <option value={2}>2 minutos de intervalo (Recomendado)</option>
+                      <option value={2}>2 minutos de intervalo</option>
                       <option value={5}>5 minutos de intervalo</option>
                       <option value={10}>10 minutos de intervalo</option>
                       <option value={15}>15 minutos de intervalo</option>
@@ -1834,9 +1948,16 @@ function BulkSchedulePage() {
                             >
                               {/* Left: Time, Account & Cover Thumb */}
                               <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                <span className="font-extrabold text-muted-foreground shrink-0 text-[11px]">
-                                  {slot.timeStr}
-                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className="font-extrabold text-foreground text-[11px] font-mono">
+                                    {slot.timeStr}
+                                  </span>
+                                  {slot.burstDelta !== undefined && (
+                                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1 py-0.5 rounded">
+                                      (+{slot.burstDelta}s)
+                                    </span>
+                                  )}
+                                </div>
 
                                 {/* Assigned Cover Thumbnail */}
                                 {slot.coverPreviewUrl ? (
