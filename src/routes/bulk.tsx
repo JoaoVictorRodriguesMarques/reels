@@ -107,6 +107,70 @@ async function fetchWithRetry(
   throw new Error(`Falha no upload para o Cloudflare R2 após ${retries} tentativas.`);
 }
 
+function generateBurstSizes(totalVideos: number, minSize: number, maxSize: number): number[] {
+  if (totalVideos <= 0) return [];
+  const realMin = Math.max(1, Math.min(minSize, maxSize));
+  const realMax = Math.max(realMin, maxSize);
+
+  if (totalVideos <= realMin) return [totalVideos];
+
+  const sizes: number[] = [];
+  let remaining = totalVideos;
+
+  while (remaining > 0) {
+    if (remaining <= realMax) {
+      sizes.push(remaining);
+      break;
+    }
+    const currentMax = Math.min(realMax, remaining - 1);
+    const currentMin = Math.min(realMin, currentMax);
+    const chosen = Math.floor(Math.random() * (currentMax - currentMin + 1)) + currentMin;
+    sizes.push(chosen);
+    remaining -= chosen;
+  }
+  return sizes;
+}
+
+function getBurstSlotIndices(
+  i: number,
+  burstSizes: number[],
+  fallbackBatchSize: number,
+): { burstIndex: number; withinBurstIndex: number; burstSize: number; isFirstInBurst: boolean } {
+  if (!burstSizes || burstSizes.length === 0) {
+    const burstIndex = Math.floor(i / fallbackBatchSize);
+    const withinBurstIndex = i % fallbackBatchSize;
+    return {
+      burstIndex,
+      withinBurstIndex,
+      burstSize: fallbackBatchSize,
+      isFirstInBurst: withinBurstIndex === 0,
+    };
+  }
+
+  let accumulated = 0;
+  for (let b = 0; b < burstSizes.length; b++) {
+    const bSize = burstSizes[b];
+    if (i < accumulated + bSize) {
+      const withinBurstIndex = i - accumulated;
+      return {
+        burstIndex: b,
+        withinBurstIndex,
+        burstSize: bSize,
+        isFirstInBurst: withinBurstIndex === 0,
+      };
+    }
+    accumulated += bSize;
+  }
+
+  const extraIndex = i - accumulated;
+  return {
+    burstIndex: burstSizes.length,
+    withinBurstIndex: extraIndex,
+    burstSize: fallbackBatchSize,
+    isFirstInBurst: extraIndex === 0,
+  };
+}
+
 function BulkSchedulePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
@@ -168,6 +232,10 @@ function BulkSchedulePage() {
   const [isBurstRandomMode, setIsBurstRandomMode] = useState(true);
   const [burstTrigger, setBurstTrigger] = useState(0);
   const [stableBurstDelays, setStableBurstDelays] = useState<Record<string, number[]>>({});
+  const [isRandomBatchSize, setIsRandomBatchSize] = useState(false);
+  const [minBatchSize, setMinBatchSize] = useState(10);
+  const [maxBatchSize, setMaxBatchSize] = useState(18);
+  const [stableBurstSizes, setStableBurstSizes] = useState<Record<string, number[]>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -323,6 +391,41 @@ function BulkSchedulePage() {
     setStableBurstDelays(newDelays);
   }, [isBurstRandomMode, selectedAccounts, videoFiles.length, burstTrigger]);
 
+  // Generate burst sizes per account (fixed batch size or randomized burst sizes)
+  useEffect(() => {
+    if (selectedAccounts.length === 0 || videoFiles.length === 0) {
+      return;
+    }
+
+    const newBurstSizes: Record<string, number[]> = {};
+    selectedAccounts.forEach((accId) => {
+      if (isRandomBatchSize) {
+        // Random sizes between minBatchSize and maxBatchSize (e.g. 13, 17, 14)
+        newBurstSizes[accId] = generateBurstSizes(videoFiles.length, minBatchSize, maxBatchSize);
+      } else {
+        const count = Math.ceil(videoFiles.length / batchSize);
+        const sizes: number[] = [];
+        let rem = videoFiles.length;
+        for (let b = 0; b < count; b++) {
+          const s = Math.min(batchSize, rem);
+          sizes.push(s);
+          rem -= s;
+        }
+        newBurstSizes[accId] = sizes;
+      }
+    });
+
+    setStableBurstSizes(newBurstSizes);
+  }, [
+    isRandomBatchSize,
+    minBatchSize,
+    maxBatchSize,
+    batchSize,
+    selectedAccounts,
+    videoFiles.length,
+    burstTrigger,
+  ]);
+
   const handleReshuffle = () => {
     const newOrders: Record<string, number[]> = {};
     selectedAccounts.forEach((accId) => {
@@ -477,6 +580,7 @@ function BulkSchedulePage() {
   };
 
   // Helper to compute chronologically sorted schedule list
+  // Helper to compute chronologically sorted schedule list
   interface ScheduleSlot {
     dateStr: string;
     timeStr: string;
@@ -488,6 +592,9 @@ function BulkSchedulePage() {
     coverPreviewUrl: string | null;
     coverName: string;
     burstDelta?: number;
+    burstIndex?: number;
+    burstSize?: number;
+    isFirstInBurst?: boolean;
   }
 
   const getScheduleSlots = (): ScheduleSlot[] => {
@@ -518,17 +625,20 @@ function BulkSchedulePage() {
         let dayIndex = 0;
         let burstDelta: number | undefined = undefined;
 
-        const slotIndex = Math.floor(i / batchSize);
-        const withinSlotIndex = i % batchSize;
+        const { burstIndex, withinBurstIndex, burstSize, isFirstInBurst } = getBurstSlotIndices(
+          i,
+          stableBurstSizes[accId] || [],
+          batchSize,
+        );
 
         let baseTime = "12:00";
         if (isRandomTimeMode) {
-          dayIndex = Math.floor(slotIndex / randomCountPerDay);
-          const timeIndex = slotIndex % randomCountPerDay;
+          dayIndex = Math.floor(burstIndex / randomCountPerDay);
+          const timeIndex = burstIndex % randomCountPerDay;
           baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
         } else {
-          dayIndex = Math.floor(slotIndex / sortedTimes.length);
-          const timeIndex = slotIndex % sortedTimes.length;
+          dayIndex = Math.floor(burstIndex / sortedTimes.length);
+          const timeIndex = burstIndex % sortedTimes.length;
           baseTime = sortedTimes[timeIndex];
         }
 
@@ -537,10 +647,10 @@ function BulkSchedulePage() {
         if (isBurstRandomMode) {
           const accountDelays = stableBurstDelays[accId] || [];
           let cumulativeSec = accountDelays[0] || 15;
-          for (let k = 1; k <= withinSlotIndex; k++) {
+          for (let k = 1; k <= withinBurstIndex; k++) {
             const d = accountDelays[k] || 36;
             cumulativeSec += d;
-            if (k === withinSlotIndex) {
+            if (k === withinBurstIndex) {
               burstDelta = d;
             }
           }
@@ -550,7 +660,7 @@ function BulkSchedulePage() {
           const s = totalSec % 60;
           timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
         } else {
-          const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
+          const offsetMinutes = withinBurstIndex * slotSpacingMinutes;
           const totalMin = baseMin + offsetMinutes;
           const h = Math.floor(totalMin / 60) % 24;
           const m = totalMin % 60;
@@ -575,6 +685,9 @@ function BulkSchedulePage() {
           coverPreviewUrl: coverInfo.previewUrl,
           coverName: coverInfo.name,
           burstDelta,
+          burstIndex,
+          burstSize,
+          isFirstInBurst,
         });
       });
     });
@@ -782,17 +895,20 @@ function BulkSchedulePage() {
           let minutes = 0;
           let seconds = 0;
 
-          const slotIndex = Math.floor(i / batchSize);
-          const withinSlotIndex = i % batchSize;
+          const { burstIndex, withinBurstIndex } = getBurstSlotIndices(
+            i,
+            stableBurstSizes[accId] || [],
+            batchSize,
+          );
 
           let baseTime = "12:00";
           if (isRandomTimeMode) {
-            dayIndex = Math.floor(slotIndex / randomCountPerDay);
-            const timeIndex = slotIndex % randomCountPerDay;
+            dayIndex = Math.floor(burstIndex / randomCountPerDay);
+            const timeIndex = burstIndex % randomCountPerDay;
             baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
           } else {
-            dayIndex = Math.floor(slotIndex / sortedTimes.length);
-            const timeIndex = slotIndex % sortedTimes.length;
+            dayIndex = Math.floor(burstIndex / sortedTimes.length);
+            const timeIndex = burstIndex % sortedTimes.length;
             baseTime = sortedTimes[timeIndex];
           }
 
@@ -801,7 +917,7 @@ function BulkSchedulePage() {
           if (isBurstRandomMode) {
             const accountDelays = stableBurstDelays[accId] || [];
             let cumulativeSec = accountDelays[0] || 15;
-            for (let k = 1; k <= withinSlotIndex; k++) {
+            for (let k = 1; k <= withinBurstIndex; k++) {
               cumulativeSec += accountDelays[k] || 36;
             }
             const totalSec = baseMin * 60 + cumulativeSec;
@@ -809,7 +925,7 @@ function BulkSchedulePage() {
             minutes = Math.floor((totalSec % 3600) / 60);
             seconds = totalSec % 60;
           } else {
-            const offsetMinutes = withinSlotIndex * slotSpacingMinutes;
+            const offsetMinutes = withinBurstIndex * slotSpacingMinutes;
             const totalMin = baseMin + offsetMinutes;
             hours = Math.floor(totalMin / 60) % 24;
             minutes = totalMin % 60;
@@ -1594,6 +1710,7 @@ function BulkSchedulePage() {
               )}
 
               {/* Quantity of videos per time slot (Container / Batch Size) */}
+              {/* Quantity of videos per time slot (Container / Batch Size) */}
               <div className="space-y-3 p-4 rounded-xl border border-border/60 bg-secondary/15">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
@@ -1601,60 +1718,202 @@ function BulkSchedulePage() {
                       <Layers className="size-4 text-primary" /> Quantidade de Vídeos por Horário (Container / Lote)
                     </Label>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                      Defina quantos vídeos você quer que sejam postados em cada um dos horários configurados.
+                      {isRandomBatchSize
+                        ? "A quantidade de vídeos por horário será sorteada aleatoriamente dentro da faixa definida."
+                        : "Defina quantos vídeos você quer que sejam postados em cada um dos horários configurados."}
                     </p>
                   </div>
 
-                  {/* Free custom number input with +/- controls */}
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center bg-card border border-border/80 rounded-lg p-0.5 shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => setBatchSize((prev) => Math.max(1, prev - 1))}
-                        className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
-                      >
-                        -
-                      </button>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={500}
-                        value={batchSize}
-                        onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-16 h-8 text-center font-extrabold text-sm border-0 bg-transparent focus-visible:ring-0 p-0"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setBatchSize((prev) => prev + 1)}
-                        className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
-                    <span className="text-xs font-semibold text-muted-foreground">vídeos / horário</span>
+                  {/* Switch to enable Random Quantity per Burst */}
+                  <div className="flex items-center gap-2 shrink-0 bg-card/60 px-2.5 py-1 rounded-lg border border-border/60">
+                    <Label htmlFor="random-burst-switch" className="text-xs font-bold text-muted-foreground cursor-pointer">
+                      🎲 Quantidade Aleatória
+                    </Label>
+                    <Switch
+                      id="random-burst-switch"
+                      checked={isRandomBatchSize}
+                      onCheckedChange={setIsRandomBatchSize}
+                    />
                   </div>
                 </div>
 
-                {/* Quick preset buttons */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mr-1">
-                    Atalhos:
-                  </span>
-                  {[1, 2, 3, 4, 5, 10, 20].map((num) => (
-                    <button
-                      key={num}
-                      type="button"
-                      onClick={() => setBatchSize(num)}
-                      className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all cursor-pointer border ${
-                        batchSize === num
-                          ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                          : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary/40"
-                      }`}
-                    >
-                      {num} {num === 1 ? "vídeo" : "vídeos"}
-                    </button>
-                  ))}
-                </div>
+                {!isRandomBatchSize ? (
+                  <>
+                    {/* Free custom number input with +/- controls */}
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <span className="text-xs font-semibold text-muted-foreground">Vídeos por horário fixo:</span>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center bg-card border border-border/80 rounded-lg p-0.5 shadow-sm">
+                          <button
+                            type="button"
+                            onClick={() => setBatchSize((prev) => Math.max(1, prev - 1))}
+                            className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={500}
+                            value={batchSize}
+                            onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-16 h-8 text-center font-extrabold text-sm border-0 bg-transparent focus-visible:ring-0 p-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setBatchSize((prev) => prev + 1)}
+                            className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <span className="text-xs font-semibold text-muted-foreground">vídeos / horário</span>
+                      </div>
+                    </div>
+
+                    {/* Quick preset buttons */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mr-1">
+                        Atalhos:
+                      </span>
+                      {[1, 2, 3, 4, 5, 10, 20].map((num) => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setBatchSize(num)}
+                          className={`px-2.5 py-1 text-xs rounded-lg font-bold transition-all cursor-pointer border ${
+                            batchSize === num
+                              ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                              : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary/40"
+                          }`}
+                        >
+                          {num} {num === 1 ? "vídeo" : "vídeos"}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-3 pt-1">
+                    {/* Range Inputs: Min & Max per Burst */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5 bg-card/60 p-2.5 rounded-xl border border-border/50">
+                        <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                          Mínimo por Rajada
+                        </Label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setMinBatchSize((prev) => Math.max(1, prev - 1))}
+                            className="size-7 rounded hover:bg-secondary flex items-center justify-center text-sm font-bold cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={maxBatchSize}
+                            value={minBatchSize}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value) || 1);
+                              setMinBatchSize(val);
+                              if (val > maxBatchSize) setMaxBatchSize(val);
+                            }}
+                            className="h-7 text-center font-black text-sm border-border/50 p-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const val = minBatchSize + 1;
+                              setMinBatchSize(val);
+                              if (val > maxBatchSize) setMaxBatchSize(val);
+                            }}
+                            className="size-7 rounded hover:bg-secondary flex items-center justify-center text-sm font-bold cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 bg-card/60 p-2.5 rounded-xl border border-border/50">
+                        <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                          Máximo por Rajada
+                        </Label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setMaxBatchSize((prev) => Math.max(minBatchSize, prev - 1))}
+                            className="size-7 rounded hover:bg-secondary flex items-center justify-center text-sm font-bold cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <Input
+                            type="number"
+                            min={minBatchSize}
+                            max={500}
+                            value={maxBatchSize}
+                            onChange={(e) => {
+                              const val = Math.max(minBatchSize, parseInt(e.target.value) || minBatchSize);
+                              setMaxBatchSize(val);
+                            }}
+                            className="h-7 text-center font-black text-sm border-border/50 p-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setMaxBatchSize((prev) => prev + 1)}
+                            className="size-7 rounded hover:bg-secondary flex items-center justify-center text-sm font-bold cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Range Presets */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mr-1">
+                        Exemplos Virais:
+                      </span>
+                      {[
+                        { label: "10 a 18 (Ex: 13, 17, 14)", min: 10, max: 18 },
+                        { label: "5 a 12", min: 5, max: 12 },
+                        { label: "12 a 20", min: 12, max: 20 },
+                        { label: "3 a 7", min: 3, max: 7 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => {
+                            setMinBatchSize(preset.min);
+                            setMaxBatchSize(preset.max);
+                          }}
+                          className={`px-2 py-0.5 text-[11px] rounded-lg font-bold transition-all cursor-pointer border ${
+                            minBatchSize === preset.min && maxBatchSize === preset.max
+                              ? "bg-amber-500/15 text-amber-400 border-amber-500/40 shadow-sm"
+                              : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary/40"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Dynamic summary of generated bursts */}
+                    {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (
+                      <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-xs text-amber-300/90 leading-relaxed flex items-center gap-2">
+                        <Sparkles className="size-4 text-amber-400 shrink-0" />
+                        <span>
+                          Rajadas sorteadas:{" "}
+                          <strong>
+                            {stableBurstSizes[selectedAccounts[0]]
+                              .map((sz, idx) => `${sz} vídeos (${idx + 1}º horário)`)
+                              .join(" → ")}
+                          </strong>
+                          . (Total: {videoFiles.length} vídeos)
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Viral Burst Random Delay Switch */}
                 <div className="pt-3 border-t border-border/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1942,62 +2201,69 @@ function BulkSchedulePage() {
                         </h4>
                         <div className="space-y-2 pl-1">
                           {dateSlots.map((slot, index) => (
-                            <div
-                              key={index}
-                              className="flex items-center justify-between text-xs py-2.5 px-3 rounded-xl bg-secondary/35 border border-border/25 gap-3 hover:bg-secondary/50 transition-colors"
-                            >
-                              {/* Left: Time, Account & Cover Thumb */}
-                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <span className="font-extrabold text-foreground text-[11px] font-mono">
-                                    {slot.timeStr}
+                            <div key={index} className="space-y-1">
+                              {slot.isFirstInBurst && (
+                                <div className="pt-2 pb-0.5 flex items-center gap-2">
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                                    <Sparkles className="size-3" />
+                                    Rajada {(slot.burstIndex || 0) + 1} • {slot.burstSize} {slot.burstSize === 1 ? "vídeo" : "vídeos"}
                                   </span>
-                                  {slot.burstDelta !== undefined && (
-                                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1 py-0.5 rounded">
-                                      (+{slot.burstDelta}s)
-                                    </span>
-                                  )}
                                 </div>
-
-                                {/* Assigned Cover Thumbnail */}
-                                {slot.coverPreviewUrl ? (
-                                  <img
-                                    src={slot.coverPreviewUrl}
-                                    alt="Capa"
-                                    className="size-7 rounded-md object-cover ring-1 ring-border/50 shrink-0 shadow-sm"
-                                    title={`Capa: ${slot.coverName}`}
-                                  />
-                                ) : (
-                                  <div
-                                    className="size-7 rounded-md bg-secondary/80 grid place-items-center shrink-0 border border-border/40 text-muted-foreground"
-                                    title="Miniatura automática do vídeo"
-                                  >
-                                    <Video className="size-3.5" />
+                              )}
+                              <div className="flex items-center justify-between text-xs py-2.5 px-3 rounded-xl bg-secondary/35 border border-border/25 gap-3 hover:bg-secondary/50 transition-colors">
+                                {/* Left: Time, Account & Cover Thumb */}
+                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="font-extrabold text-foreground text-[11px] font-mono">
+                                      {slot.timeStr}
+                                    </span>
+                                    {slot.burstDelta !== undefined && (
+                                      <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1 py-0.5 rounded">
+                                        (+{slot.burstDelta}s)
+                                      </span>
+                                    )}
                                   </div>
-                                )}
 
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5">
-                                    <span
-                                      className="font-extrabold truncate"
-                                      style={{ color: slot.accountColor }}
+                                  {/* Assigned Cover Thumbnail */}
+                                  {slot.coverPreviewUrl ? (
+                                    <img
+                                      src={slot.coverPreviewUrl}
+                                      alt="Capa"
+                                      className="size-7 rounded-md object-cover ring-1 ring-border/50 shrink-0 shadow-sm"
+                                      title={`Capa: ${slot.coverName}`}
+                                    />
+                                  ) : (
+                                    <div
+                                      className="size-7 rounded-md bg-secondary/80 grid place-items-center shrink-0 border border-border/40 text-muted-foreground"
+                                      title="Miniatura automática do vídeo"
                                     >
-                                      @{slot.accountUsername}
+                                      <Video className="size-3.5" />
+                                    </div>
+                                  )}
+
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span
+                                        className="font-extrabold truncate"
+                                        style={{ color: slot.accountColor }}
+                                      >
+                                        @{slot.accountUsername}
+                                      </span>
+                                    </div>
+                                    <span
+                                      className="truncate text-muted-foreground/80 font-mono text-[10px] block"
+                                      title={slot.videoFileName}
+                                    >
+                                      {slot.videoFileName}
                                     </span>
                                   </div>
-                                  <span
-                                    className="truncate text-muted-foreground/80 font-mono text-[10px] block"
-                                    title={slot.videoFileName}
-                                  >
-                                    {slot.videoFileName}
-                                  </span>
                                 </div>
-                              </div>
 
-                              {/* Right: Cover badge */}
-                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-background/80 border border-border/40 text-muted-foreground shrink-0 truncate max-w-[100px]">
-                                {slot.coverName}
-                              </span>
+                                {/* Right: Cover badge */}
+                                <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-background/80 border border-border/40 text-muted-foreground shrink-0 truncate max-w-[100px]">
+                                  {slot.coverName}
+                                </span>
+                              </div>
                             </div>
                           ))}
                         </div>
