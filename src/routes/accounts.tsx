@@ -823,11 +823,11 @@ function AccountsPage() {
                           <Star className="size-3.5 mr-1.5 text-muted-foreground" /> Tornar Ativa
                         </Button>
                       )}
-                      <Link to="/calendar" className="shrink-0">
+                      <Link to="/posts" className="shrink-0">
                         <Button
                           size="icon"
                           className="size-9 bg-secondary hover:bg-secondary/70 text-foreground border border-border/60 rounded-xl"
-                          title="Ir para o calendário de postagens"
+                          title="Ver posts agendados"
                         >
                           <Plus className="size-4 text-primary" />
                         </Button>

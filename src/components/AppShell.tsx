@@ -131,7 +131,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const navItems = [
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/calendar", label: "Fluxo de Reels", icon: Video },
     { to: "/bulk", label: "Postar em Massa", icon: Layers },
     { to: "/posts", label: "Excluir Reels", icon: Trash2 },
     { to: "/accounts", label: "Contas", icon: Instagram },
