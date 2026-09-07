@@ -37,15 +37,15 @@ export async function getMetaCredentialsForUser(supabase: any, userId: string) {
       process.env.META_APP_ID ||
       process.env.META_APP_ID_GUILHERME ||
       import.meta.env.VITE_META_APP_ID ||
-      "1382069030570648";
+      "1640486920796202";
     appSecret =
       process.env.META_APP_SECRET ||
       process.env.META_APP_SECRET_GUILHERME ||
-      "66817ccb76293ed83b1bfd4810dbd6f4";
+      "bf711ee7f8430d977a2c55e595efa8fe";
   }
 
   // Clean the app ID
-  const cleanedAppId = appId?.toString()?.match(/\d+/)?.[0] ?? "1382069030570648";
+  const cleanedAppId = appId?.toString()?.match(/\d+/)?.[0] ?? "1640486920796202";
 
   return { appId: cleanedAppId, appSecret, profile };
 }
@@ -325,12 +325,12 @@ export const getAvailableMetaAppIds = createServerFn({ method: "GET" })
       process.env.META_APP_ID ||
       process.env.META_APP_ID_GUILHERME ||
       import.meta.env.VITE_META_APP_ID ||
-      "1382069030570648";
+      "1640486920796202";
     const rawMatheus = process.env.META_APP_ID_MATHEUS || "";
     const rawPedro = process.env.META_APP_ID_PEDRO || "";
     const rawAntonio = process.env.META_APP_ID_ANTONIO || "";
     const rawGreg = process.env.META_APP_ID_GREG || "";
-    const defaultAppId = rawDefault.match(/\d+/)?.[0] ?? "1382069030570648";
+    const defaultAppId = rawDefault.match(/\d+/)?.[0] ?? "1640486920796202";
     const matheusAppId = rawMatheus.match(/\d+/)?.[0] ?? null;
     const pedroAppId = rawPedro.match(/\d+/)?.[0] ?? null;
     const antonioAppId = rawAntonio.match(/\d+/)?.[0] ?? null;

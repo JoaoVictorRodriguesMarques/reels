@@ -44,7 +44,7 @@ interface StorageStats {
 
 function SettingsPage() {
   const [loading, setLoading] = useState(true);
-  const [appId, setAppId] = useState<string>("1382069030570648");
+  const [appId, setAppId] = useState<string>("1640486920796202");
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [optimizing, setOptimizing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
