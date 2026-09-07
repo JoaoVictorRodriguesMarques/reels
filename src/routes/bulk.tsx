@@ -222,6 +222,7 @@ function BulkSchedulePage() {
   const [cleanMetadata, setCleanMetadata] = useState(true);
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
+  const [scheduledSummary, setScheduledSummary] = useState<Record<string, { count: number; lastDate: string | null }>>({});
 
   // Upload progress and submitting states
   const [submitting, setSubmitting] = useState(false);
@@ -260,22 +261,52 @@ function BulkSchedulePage() {
         }
       });
 
+    // Load accurate pending post counts and last scheduled dates via Postgres RPC
     supabase
-      .from("scheduled_posts")
-      .select("instagram_account_id, scheduled_at")
-      .eq("status", "pending")
-      .order("scheduled_at", { ascending: false })
-      .then(({ data }) => {
-        const datesMap: Record<string, string> = {};
-        if (data) {
-          data.forEach((post) => {
-            const accId = post.instagram_account_id;
-            if (!datesMap[accId]) {
-              datesMap[accId] = post.scheduled_at;
+      .rpc("get_account_scheduled_counts")
+      .then(({ data, error }) => {
+        if (!error && data && Array.isArray(data)) {
+          const summaryMap: Record<string, { count: number; lastDate: string | null }> = {};
+          const datesMap: Record<string, string> = {};
+          data.forEach((row: any) => {
+            const accId = row.instagram_account_id;
+            summaryMap[accId] = {
+              count: Number(row.pending_count || 0),
+              lastDate: row.last_scheduled_at || null,
+            };
+            if (row.last_scheduled_at) {
+              datesMap[accId] = row.last_scheduled_at;
             }
           });
+          setScheduledSummary(summaryMap);
+          setLastScheduledDates(datesMap);
+        } else {
+          // Fallback direct query with high limit to bypass 1000-row default limit
+          supabase
+            .from("scheduled_posts")
+            .select("instagram_account_id, scheduled_at")
+            .eq("status", "pending")
+            .order("scheduled_at", { ascending: false })
+            .limit(10000)
+            .then(({ data: fallbackData }) => {
+              const datesMap: Record<string, string> = {};
+              const summaryMap: Record<string, { count: number; lastDate: string | null }> = {};
+              if (fallbackData) {
+                fallbackData.forEach((post) => {
+                  const accId = post.instagram_account_id;
+                  if (!summaryMap[accId]) {
+                    summaryMap[accId] = { count: 0, lastDate: post.scheduled_at };
+                  }
+                  summaryMap[accId].count++;
+                  if (!datesMap[accId]) {
+                    datesMap[accId] = post.scheduled_at;
+                  }
+                });
+              }
+              setScheduledSummary(summaryMap);
+              setLastScheduledDates(datesMap);
+            });
         }
-        setLastScheduledDates(datesMap);
       });
   }, []);
 
@@ -1166,22 +1197,33 @@ function BulkSchedulePage() {
                               <span className="text-foreground">@{a.username}</span>
                             </span>
                           </div>
-                          {lastDate ? (
-                            <span
-                              className="text-[10px] text-muted-foreground bg-secondary/80 border border-border/40 px-1.5 py-0.5 rounded-md font-mono shrink-0 ml-2"
-                              title="Último post agendado"
-                            >
-                              Até:{" "}
-                              {new Date(lastDate).toLocaleDateString("pt-BR", {
-                                day: "2-digit",
-                                month: "2-digit",
-                              })}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded-md shrink-0 ml-2">
-                              Vazio
-                            </span>
-                          )}
+                          {(() => {
+                            const info = scheduledSummary[a.id];
+                            const pendingCount = info?.count || 0;
+                            const postDate = info?.lastDate || lastScheduledDates[a.id];
+
+                            if (pendingCount > 0) {
+                              return (
+                                <span
+                                  className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/25 px-1.5 py-0.5 rounded-md font-mono shrink-0 ml-2 font-bold flex items-center gap-1"
+                                  title={`${pendingCount} reels agendados na fila${postDate ? ` (último em ${new Date(postDate).toLocaleDateString("pt-BR")})` : ""}`}
+                                >
+                                  <span>{pendingCount} na fila</span>
+                                  {postDate && (
+                                    <span className="text-muted-foreground/80 font-normal">
+                                      • até {new Date(postDate).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            }
+
+                            return (
+                              <span className="text-[10px] text-muted-foreground bg-secondary/80 border border-border/40 px-1.5 py-0.5 rounded-md shrink-0 ml-2">
+                                Vazio
+                              </span>
+                            );
+                          })()}
                         </label>
                       );
                     })}
