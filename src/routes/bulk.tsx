@@ -35,6 +35,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getUploadPresignedUrl } from "@/lib/r2.functions";
 import { sanitizeMp4Metadata } from "@/lib/mp4-sanitizer";
+import { ensureJpegCover } from "@/lib/image-sanitizer";
 
 export const Route = createFileRoute("/bulk")({
   head: () => ({ meta: [{ title: "Postar em Massa — Reelary" }] }),
@@ -841,22 +842,23 @@ function BulkSchedulePage() {
       if (coverMode === "single") {
         let singleCoverUrl: string | null = null;
         if (coverFile) {
-          const coverKey = `${coverFile.name}-${coverFile.size}-${coverFile.lastModified}`;
+          const sanitizedCover = await ensureJpegCover(coverFile);
+          const coverKey = `${sanitizedCover.name}-${sanitizedCover.size}-${sanitizedCover.lastModified}`;
           if (uploadedCoverCache[coverKey]) {
             singleCoverUrl = uploadedCoverCache[coverKey];
           } else {
-            setUploadStatus("Enviando foto de capa comum...");
+            setUploadStatus("Enviando foto de capa comum (JPEG otimizada)...");
             const coverUpload = await getUploadPresignedUrl({
               data: {
-                fileName: coverFile.name,
-                contentType: coverFile.type || "image/jpeg",
+                fileName: sanitizedCover.name,
+                contentType: "image/jpeg",
               },
             });
 
             await fetchWithRetry(coverUpload.uploadUrl, {
               method: "PUT",
-              body: coverFile,
-              headers: { "Content-Type": coverFile.type || "image/jpeg" },
+              body: sanitizedCover,
+              headers: { "Content-Type": "image/jpeg" },
             });
 
             singleCoverUrl = coverUpload.publicUrl;
@@ -873,22 +875,23 @@ function BulkSchedulePage() {
         for (let gIdx = 0; gIdx < coverGroups.length; gIdx++) {
           const group = coverGroups[gIdx];
           if (group.file) {
-            const coverKey = `${group.file.name}-${group.file.size}-${group.file.lastModified}`;
+            const sanitizedGroupCover = await ensureJpegCover(group.file);
+            const coverKey = `${sanitizedGroupCover.name}-${sanitizedGroupCover.size}-${sanitizedGroupCover.lastModified}`;
             if (uploadedCoverCache[coverKey]) {
               groupUrlMap[group.id] = uploadedCoverCache[coverKey];
             } else {
-              setUploadStatus(`Enviando ${group.name} (${gIdx + 1} de ${coverGroups.length})...`);
+              setUploadStatus(`Enviando ${group.name} (${gIdx + 1} de ${coverGroups.length}) em formato JPEG...`);
               const coverUpload = await getUploadPresignedUrl({
                 data: {
-                  fileName: group.file.name,
-                  contentType: group.file.type || "image/jpeg",
+                  fileName: sanitizedGroupCover.name,
+                  contentType: "image/jpeg",
                 },
               });
 
               await fetchWithRetry(coverUpload.uploadUrl, {
                 method: "PUT",
-                body: group.file,
-                headers: { "Content-Type": group.file.type || "image/jpeg" },
+                body: sanitizedGroupCover,
+                headers: { "Content-Type": "image/jpeg" },
               });
 
               const uploadedUrl = coverUpload.publicUrl;

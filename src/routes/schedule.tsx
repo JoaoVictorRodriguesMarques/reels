@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { getUploadPresignedUrl } from "@/lib/r2.functions";
 import { sanitizeMp4Metadata } from "@/lib/mp4-sanitizer";
+import { ensureJpegCover } from "@/lib/image-sanitizer";
 
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -169,10 +170,11 @@ function SchedulePage() {
       // 2. Upload Cover to Cloudflare R2 (if exists)
       let coverUrl = null;
       if (coverFile) {
+        const sanitizedCover = await ensureJpegCover(coverFile);
         const coverUpload = await getUploadPresignedUrl({
           data: {
-            fileName: coverFile.name,
-            contentType: coverFile.type || "image/jpeg",
+            fileName: sanitizedCover.name,
+            contentType: "image/jpeg",
           },
         });
 
@@ -180,9 +182,9 @@ function SchedulePage() {
         try {
           coverPutRes = await fetch(coverUpload.uploadUrl, {
             method: "PUT",
-            body: coverFile,
+            body: sanitizedCover,
             headers: {
-              "Content-Type": coverFile.type || "image/jpeg",
+              "Content-Type": "image/jpeg",
             },
           });
         } catch (fetchErr: any) {

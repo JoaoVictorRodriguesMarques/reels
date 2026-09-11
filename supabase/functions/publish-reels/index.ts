@@ -1,6 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from "npm:@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand } from "npm:@aws-sdk/client-s3";
+import UPNG from "npm:upng-js@2.1.0";
+import { encode as encodeJpeg } from "npm:jpeg-js@0.4.4";
 
 function getS3Client() {
   const accountId = Deno.env.get("R2_ACCOUNT_ID");
@@ -289,8 +291,67 @@ Deno.serve(async (req: Request) => {
           }
 
           if (post.cover_url) {
-            console.log(`[${post.id}] Using custom cover image: ${post.cover_url}`);
-            body.cover_url = post.cover_url;
+            let finalCoverUrl = post.cover_url;
+
+            // Meta Instagram Graph API strictly requires Reel cover images to be in JPEG format (image/jpeg).
+            // If the cover URL is a PNG, convert it to JPEG on the fly and upload the .jpg to R2.
+            if (post.cover_url.toLowerCase().includes(".png")) {
+              try {
+                console.log(`[${post.id}] Converting PNG cover to JPEG for Meta compliance: ${post.cover_url}`);
+                const r2PublicDomain = Deno.env.get("R2_PUBLIC_DOMAIN") ?? null;
+                const r2BucketName = Deno.env.get("R2_BUCKET_NAME") ?? "reels";
+                const s3 = getS3Client();
+
+                const imgRes = await fetch(post.cover_url);
+                if (imgRes.ok && s3) {
+                  const imgBuf = await imgRes.arrayBuffer();
+                  const img = UPNG.decode(imgBuf);
+                  const rgba8 = UPNG.toRGBA8(img)[0];
+                  const jpegData = encodeJpeg(
+                    {
+                      data: new Uint8Array(rgba8),
+                      width: img.width,
+                      height: img.height,
+                    },
+                    95,
+                  );
+
+                  const oldKey = getR2KeyFromUrl(post.cover_url, r2PublicDomain);
+                  const newKey = oldKey
+                    ? oldKey.replace(/\.png$/i, ".jpg")
+                    : `covers/${post.id}_cover.jpg`;
+
+                  await s3.send(
+                    new PutObjectCommand({
+                      Bucket: r2BucketName,
+                      Key: newKey,
+                      Body: jpegData.data,
+                      ContentType: "image/jpeg",
+                    }),
+                  );
+
+                  const normalizedDomain = r2PublicDomain
+                    ? r2PublicDomain.endsWith("/")
+                      ? r2PublicDomain.slice(0, -1)
+                      : r2PublicDomain
+                    : "";
+                  finalCoverUrl = `${normalizedDomain}/${newKey}`;
+
+                  // Update database with normalized JPEG cover URL
+                  await supabase
+                    .from("scheduled_posts")
+                    .update({ cover_url: finalCoverUrl })
+                    .eq("id", post.id);
+
+                  console.log(`[${post.id}] ✅ Cover successfully converted to JPEG: ${finalCoverUrl}`);
+                }
+              } catch (convErr: any) {
+                console.error(`[${post.id}] Error converting PNG cover to JPEG:`, convErr);
+              }
+            }
+
+            console.log(`[${post.id}] Using custom cover image: ${finalCoverUrl}`);
+            body.cover_url = finalCoverUrl;
           }
 
           const createRes = await fetch(`${graphApiUrl}/${ig.instagram_user_id}/media`, {
