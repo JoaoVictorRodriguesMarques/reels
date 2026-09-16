@@ -23,6 +23,7 @@ import {
   Palette,
   Zap,
   RotateCcw,
+  Users,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -218,6 +219,11 @@ function BulkSchedulePage() {
   const [scheduleTimeMode, setScheduleTimeMode] = useState<"same" | "individual">("same");
   const [accountPostingTimes, setAccountPostingTimes] = useState<Record<string, AccountTimeSlot[]>>({});
   const [accountNewTimeInput, setAccountNewTimeInput] = useState<Record<string, string>>({});
+  const [accountsPerSlot, setAccountsPerSlot] = useState<number>(1);
+  const [lastStaggerInterval, setLastStaggerInterval] = useState<{ minutes: number; label: string }>({
+    minutes: 120,
+    label: "2 horas",
+  });
 
   // Random time scheduling states
   const [isRandomTimeMode, setIsRandomTimeMode] = useState(false);
@@ -506,7 +512,11 @@ function BulkSchedulePage() {
     return [...postingTimes].sort().map((t) => ({ time: t, dayOffset: 0 }));
   };
 
-  const handleStaggerAccountPostingTimes = (offsetMinutes: number, label: string) => {
+  const handleStaggerAccountPostingTimes = (
+    offsetMinutes: number,
+    label: string,
+    overrideAccountsPerSlot?: number,
+  ) => {
     if (selectedAccounts.length === 0) return;
     const firstAccId = selectedAccounts[0];
     const baseSlots = getAccountPostingTimes(firstAccId);
@@ -515,6 +525,9 @@ function BulkSchedulePage() {
       return;
     }
 
+    const currentAccountsPerSlot = Math.max(1, overrideAccountsPerSlot ?? accountsPerSlot);
+    setLastStaggerInterval({ minutes: offsetMinutes, label });
+
     const sortedBaseSlots = [...baseSlots].sort((a, b) => {
       if (a.dayOffset !== b.dayOffset) return a.dayOffset - b.dayOffset;
       return a.time.localeCompare(b.time);
@@ -522,14 +535,15 @@ function BulkSchedulePage() {
 
     const newMap: Record<string, AccountTimeSlot[]> = {};
     selectedAccounts.forEach((accId, accIdx) => {
-      const shiftMin = accIdx * offsetMinutes;
+      const stepGroup = Math.floor(accIdx / currentAccountsPerSlot);
+      const shiftMin = stepGroup * offsetMinutes;
       const shiftedSlots = sortedBaseSlots.map((slot) => {
         const baseMin = parseTimeToMinutes(slot.time) + slot.dayOffset * 24 * 60;
         const totalMin = baseMin + shiftMin;
         const dayOffset = Math.floor(totalMin / (24 * 60));
         const clockMin = totalMin % (24 * 60);
         const h = Math.floor(clockMin / 60);
-        const m = clockMin % 60;
+        const m = totalMin % 60;
         const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         return { time, dayOffset };
       });
@@ -537,7 +551,23 @@ function BulkSchedulePage() {
     });
 
     setAccountPostingTimes((prev) => ({ ...prev, ...newMap }));
-    toast.success(`Horários espaçados a cada ${label} baseados na 1ª conta!`);
+    if (currentAccountsPerSlot === 1) {
+      toast.success(`Horários espaçados a cada ${label} baseados na 1ª conta!`);
+    } else {
+      toast.success(
+        `Horários espaçados a cada ${label} (${currentAccountsPerSlot} contas por horário)!`,
+      );
+    }
+  };
+
+  const handleChangeAccountsPerSlot = (newCount: number) => {
+    const validCount = Math.max(1, Math.min(selectedAccounts.length || 100, newCount));
+    setAccountsPerSlot(validCount);
+    handleStaggerAccountPostingTimes(
+      lastStaggerInterval.minutes,
+      lastStaggerInterval.label,
+      validCount,
+    );
   };
 
   const handleSyncPostingTimesToAll = () => {
@@ -1882,57 +1912,129 @@ function BulkSchedulePage() {
                   ) : (
                     <div className="space-y-3">
                       {/* Quick Action Toolbar */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
-                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                          <Zap className="size-3.5 text-primary" /> Espaçamento a partir da Conta #1:
-                        </span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStaggerAccountPostingTimes(15, "15 min")}
-                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
-                          >
-                            +15 min
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStaggerAccountPostingTimes(30, "30 min")}
-                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
-                          >
-                            +30 min
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStaggerAccountPostingTimes(60, "1 hora")}
-                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
-                          >
-                            +1 hora
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStaggerAccountPostingTimes(120, "2 horas")}
-                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
-                          >
-                            +2 horas
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleSyncPostingTimesToAll}
-                            className="h-7 px-2.5 text-[11px] font-bold text-muted-foreground hover:text-foreground cursor-pointer flex items-center gap-1"
-                            title="Copiar os horários da Conta #1 para todas as outras contas"
-                          >
-                            <RotateCcw className="size-3" /> Copiar Conta #1 para todas
-                          </Button>
+                      <div className="flex flex-col gap-2.5 p-3 rounded-xl bg-secondary/30 border border-border/40">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                            <Zap className="size-3.5 text-primary" /> Espaçamento a partir da Conta #1:
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleStaggerAccountPostingTimes(15, "15 min")}
+                              className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                            >
+                              +15 min
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleStaggerAccountPostingTimes(30, "30 min")}
+                              className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                            >
+                              +30 min
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleStaggerAccountPostingTimes(60, "1 hora")}
+                              className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                            >
+                              +1 hora
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleStaggerAccountPostingTimes(120, "2 horas")}
+                              className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                            >
+                              +2 horas
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleStaggerAccountPostingTimes(180, "3 horas")}
+                              className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                            >
+                              +3 horas
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleSyncPostingTimesToAll}
+                              className="h-7 px-2.5 text-[11px] font-bold text-muted-foreground hover:text-foreground cursor-pointer flex items-center gap-1"
+                              title="Copiar os horários da Conta #1 para todas as outras contas"
+                            >
+                              <RotateCcw className="size-3" /> Copiar Conta #1 para todas
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Accounts per slot / concurrency control */}
+                        <div className="pt-2 border-t border-border/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                              <Users className="size-3.5 text-primary" /> Contas por Horário:
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              (quantas contas postam juntas a cada janela)
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex items-center border border-border/60 rounded-lg bg-card p-0.5 shadow-2xs">
+                              <button
+                                type="button"
+                                onClick={() => handleChangeAccountsPerSlot(accountsPerSlot - 1)}
+                                disabled={accountsPerSlot <= 1}
+                                className="size-6 rounded hover:bg-secondary flex items-center justify-center text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                                title="Diminuir 1 conta por horário"
+                              >
+                                -
+                              </button>
+                              <div className="px-2 text-xs font-black font-mono text-primary flex items-center gap-1">
+                                <span>{accountsPerSlot}</span>
+                                <span className="text-[10px] font-semibold text-muted-foreground">
+                                  {accountsPerSlot === 1 ? "conta" : "contas"}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleChangeAccountsPerSlot(accountsPerSlot + 1)}
+                                disabled={accountsPerSlot >= selectedAccounts.length}
+                                className="size-6 rounded hover:bg-secondary flex items-center justify-center text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed text-primary"
+                                title="Adicionar +1 conta por horário"
+                              >
+                                +
+                              </button>
+                            </div>
+
+                            {/* Preset buttons */}
+                            <div className="flex items-center gap-1">
+                              {[1, 2, 3, 5, 10]
+                                .filter((n) => n <= Math.max(2, selectedAccounts.length))
+                                .map((presetN) => (
+                                  <button
+                                    key={presetN}
+                                    type="button"
+                                    onClick={() => handleChangeAccountsPerSlot(presetN)}
+                                    className={`px-2 py-0.5 text-[10px] rounded-md font-bold transition-all cursor-pointer border ${
+                                      accountsPerSlot === presetN
+                                        ? "bg-primary text-primary-foreground border-primary shadow-xs"
+                                        : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary"
+                                    }`}
+                                  >
+                                    {presetN} {presetN === 1 ? "conta" : "contas"}
+                                  </button>
+                                ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -1942,6 +2044,7 @@ function BulkSchedulePage() {
                           const acc = accounts.find((a) => a.id === accId);
                           if (!acc) return null;
                           const accTimes = getAccountPostingTimes(accId);
+                          const stepGroup = Math.floor(idx / accountsPerSlot) + 1;
 
                           return (
                             <div
@@ -1950,8 +2053,8 @@ function BulkSchedulePage() {
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-[10px] font-mono font-bold size-5 rounded-md bg-secondary flex items-center justify-center text-muted-foreground shrink-0 border border-border/40">
-                                    #{idx + 1}
+                                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-secondary flex items-center justify-center text-muted-foreground shrink-0 border border-border/40">
+                                    #{idx + 1} {accountsPerSlot > 1 ? `(Grupo ${stepGroup})` : ""}
                                   </span>
                                   {acc.account_categories?.color && (
                                     <span
