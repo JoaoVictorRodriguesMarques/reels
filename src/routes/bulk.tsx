@@ -499,8 +499,15 @@ function BulkSchedulePage() {
   };
 
   const handleStaggerAccountPostingTimes = (offsetMinutes: number, label: string) => {
-    if (selectedAccounts.length === 0 || postingTimes.length === 0) return;
-    const sortedBaseTimes = [...postingTimes].sort();
+    if (selectedAccounts.length === 0) return;
+    const firstAccId = selectedAccounts[0];
+    const baseTimes = getAccountPostingTimes(firstAccId);
+    if (baseTimes.length === 0) {
+      toast.error("Adicione pelo menos um horário para a 1ª conta.");
+      return;
+    }
+
+    const sortedBaseTimes = [...baseTimes].sort();
 
     const newMap: Record<string, string[]> = {};
     selectedAccounts.forEach((accId, accIdx) => {
@@ -515,19 +522,24 @@ function BulkSchedulePage() {
       newMap[accId] = shiftedTimes;
     });
 
-    setAccountPostingTimes(newMap);
-    toast.success(`Horários espaçados com sucesso a cada ${label} por conta!`);
+    setAccountPostingTimes((prev) => ({ ...prev, ...newMap }));
+    toast.success(`Horários espaçados a cada ${label} baseados na 1ª conta!`);
   };
 
   const handleSyncPostingTimesToAll = () => {
     if (selectedAccounts.length === 0) return;
-    const baseTimes = [...postingTimes].sort();
+    const firstAccId = selectedAccounts[0];
+    const baseTimes = getAccountPostingTimes(firstAccId);
+    if (baseTimes.length === 0) {
+      toast.error("Adicione pelo menos um horário para a 1ª conta.");
+      return;
+    }
     const newMap: Record<string, string[]> = {};
     selectedAccounts.forEach((accId) => {
       newMap[accId] = [...baseTimes];
     });
-    setAccountPostingTimes(newMap);
-    toast.success("Horários base sincronizados para todas as contas!");
+    setAccountPostingTimes((prev) => ({ ...prev, ...newMap }));
+    toast.success("Horários da 1ª conta copiados para todas as outras contas!");
   };
 
   const handleAddAccountTime = (accId: string) => {
@@ -1826,7 +1838,7 @@ function BulkSchedulePage() {
                       {/* Quick Action Toolbar */}
                       <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
                         <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                          <Zap className="size-3.5 text-primary" /> Espaçamento automático:
+                          <Zap className="size-3.5 text-primary" /> Espaçamento a partir da Conta #1:
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Button
@@ -1871,9 +1883,9 @@ function BulkSchedulePage() {
                             size="sm"
                             onClick={handleSyncPostingTimesToAll}
                             className="h-7 px-2.5 text-[11px] font-bold text-muted-foreground hover:text-foreground cursor-pointer flex items-center gap-1"
-                            title="Copiar os horários padrão para todas as contas"
+                            title="Copiar os horários da Conta #1 para todas as outras contas"
                           >
-                            <RotateCcw className="size-3" /> Sincronizar todas
+                            <RotateCcw className="size-3" /> Copiar Conta #1 para todas
                           </Button>
                         </div>
                       </div>
