@@ -57,6 +57,11 @@ type Account = {
 
 export type CoverMode = "single" | "multi";
 
+export interface AccountTimeSlot {
+  time: string;
+  dayOffset: number;
+}
+
 export interface CoverGroup {
   id: string;
   name: string;
@@ -211,7 +216,7 @@ function BulkSchedulePage() {
   const [postingTimes, setPostingTimes] = useState<string[]>(["12:00", "18:00"]);
   const [newTime, setNewTime] = useState("");
   const [scheduleTimeMode, setScheduleTimeMode] = useState<"same" | "individual">("same");
-  const [accountPostingTimes, setAccountPostingTimes] = useState<Record<string, string[]>>({});
+  const [accountPostingTimes, setAccountPostingTimes] = useState<Record<string, AccountTimeSlot[]>>({});
   const [accountNewTimeInput, setAccountNewTimeInput] = useState<Record<string, string>>({});
 
   // Random time scheduling states
@@ -487,39 +492,48 @@ function BulkSchedulePage() {
     setPostingTimes((prev) => prev.filter((t) => t !== timeToRemove));
   };
 
-  const getAccountPostingTimes = (accId: string): string[] => {
+  const getAccountPostingTimes = (accId: string): AccountTimeSlot[] => {
     if (
       scheduleTimeMode === "individual" &&
       accountPostingTimes[accId] &&
       accountPostingTimes[accId].length > 0
     ) {
-      return [...accountPostingTimes[accId]].sort();
+      return [...accountPostingTimes[accId]].sort((a, b) => {
+        if (a.dayOffset !== b.dayOffset) return a.dayOffset - b.dayOffset;
+        return a.time.localeCompare(b.time);
+      });
     }
-    return [...postingTimes].sort();
+    return [...postingTimes].sort().map((t) => ({ time: t, dayOffset: 0 }));
   };
 
   const handleStaggerAccountPostingTimes = (offsetMinutes: number, label: string) => {
     if (selectedAccounts.length === 0) return;
     const firstAccId = selectedAccounts[0];
-    const baseTimes = getAccountPostingTimes(firstAccId);
-    if (baseTimes.length === 0) {
+    const baseSlots = getAccountPostingTimes(firstAccId);
+    if (baseSlots.length === 0) {
       toast.error("Adicione pelo menos um horário para a 1ª conta.");
       return;
     }
 
-    const sortedBaseTimes = [...baseTimes].sort();
+    const sortedBaseSlots = [...baseSlots].sort((a, b) => {
+      if (a.dayOffset !== b.dayOffset) return a.dayOffset - b.dayOffset;
+      return a.time.localeCompare(b.time);
+    });
 
-    const newMap: Record<string, string[]> = {};
+    const newMap: Record<string, AccountTimeSlot[]> = {};
     selectedAccounts.forEach((accId, accIdx) => {
       const shiftMin = accIdx * offsetMinutes;
-      const shiftedTimes = sortedBaseTimes.map((t) => {
-        const baseMin = parseTimeToMinutes(t);
-        const totalMin = (baseMin + shiftMin) % (24 * 60);
-        const h = Math.floor(totalMin / 60);
-        const m = totalMin % 60;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      const shiftedSlots = sortedBaseSlots.map((slot) => {
+        const baseMin = parseTimeToMinutes(slot.time) + slot.dayOffset * 24 * 60;
+        const totalMin = baseMin + shiftMin;
+        const dayOffset = Math.floor(totalMin / (24 * 60));
+        const clockMin = totalMin % (24 * 60);
+        const h = Math.floor(clockMin / 60);
+        const m = clockMin % 60;
+        const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+        return { time, dayOffset };
       });
-      newMap[accId] = shiftedTimes;
+      newMap[accId] = shiftedSlots;
     });
 
     setAccountPostingTimes((prev) => ({ ...prev, ...newMap }));
@@ -529,14 +543,14 @@ function BulkSchedulePage() {
   const handleSyncPostingTimesToAll = () => {
     if (selectedAccounts.length === 0) return;
     const firstAccId = selectedAccounts[0];
-    const baseTimes = getAccountPostingTimes(firstAccId);
-    if (baseTimes.length === 0) {
+    const baseSlots = getAccountPostingTimes(firstAccId);
+    if (baseSlots.length === 0) {
       toast.error("Adicione pelo menos um horário para a 1ª conta.");
       return;
     }
-    const newMap: Record<string, string[]> = {};
+    const newMap: Record<string, AccountTimeSlot[]> = {};
     selectedAccounts.forEach((accId) => {
-      newMap[accId] = [...baseTimes];
+      newMap[accId] = [...baseSlots];
     });
     setAccountPostingTimes((prev) => ({ ...prev, ...newMap }));
     toast.success("Horários da 1ª conta copiados para todas as outras contas!");
@@ -545,19 +559,28 @@ function BulkSchedulePage() {
   const handleAddAccountTime = (accId: string) => {
     const timeToAdd = accountNewTimeInput[accId]?.trim();
     if (!timeToAdd) return;
-    const current = accountPostingTimes[accId] || [...postingTimes];
-    if (current.includes(timeToAdd)) {
+    const current = getAccountPostingTimes(accId);
+    if (current.some((s) => s.time === timeToAdd && s.dayOffset === 0)) {
       toast.error("Este horário já foi adicionado para esta conta.");
       return;
     }
-    const updated = [...current, timeToAdd].sort();
+    const updated = [...current, { time: timeToAdd, dayOffset: 0 }].sort((a, b) => {
+      if (a.dayOffset !== b.dayOffset) return a.dayOffset - b.dayOffset;
+      return a.time.localeCompare(b.time);
+    });
     setAccountPostingTimes((prev) => ({ ...prev, [accId]: updated }));
     setAccountNewTimeInput((prev) => ({ ...prev, [accId]: "" }));
   };
 
-  const handleRemoveAccountTime = (accId: string, timeToRemove: string) => {
-    const current = accountPostingTimes[accId] || [...postingTimes];
-    const updated = current.filter((t) => t !== timeToRemove);
+  const handleRemoveAccountTime = (
+    accId: string,
+    timeToRemove: string,
+    dayOffsetToRemove: number,
+  ) => {
+    const current = getAccountPostingTimes(accId);
+    const updated = current.filter(
+      (s) => !(s.time === timeToRemove && s.dayOffset === dayOffsetToRemove),
+    );
     if (updated.length === 0) {
       toast.error("A conta precisa ter pelo menos um horário de postagem.");
       return;
@@ -747,6 +770,7 @@ function BulkSchedulePage() {
         );
 
         let baseTime = "12:00";
+        let slotDayOffset = 0;
         if (isRandomTimeMode) {
           dayIndex = Math.floor(burstIndex / randomCountPerDay);
           const timeIndex = burstIndex % randomCountPerDay;
@@ -756,10 +780,12 @@ function BulkSchedulePage() {
           const numTimes = accountTimes.length || 1;
           dayIndex = Math.floor(burstIndex / numTimes);
           const timeIndex = burstIndex % numTimes;
-          baseTime = accountTimes[timeIndex] || "12:00";
+          baseTime = accountTimes[timeIndex]?.time || "12:00";
+          slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
         }
 
-        const baseMin = parseTimeToMinutes(baseTime);
+        const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+        let totalSecondsOffset = 0;
 
         if (isBurstRandomMode) {
           const accountDelays = stableBurstDelays[accId] || [];
@@ -771,25 +797,38 @@ function BulkSchedulePage() {
               burstDelta = d;
             }
           }
-          const totalSec = baseMin * 60 + cumulativeSec;
-          const h = Math.floor(totalSec / 3600) % 24;
-          const m = Math.floor((totalSec % 3600) / 60);
-          const s = totalSec % 60;
-          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+          totalSecondsOffset = cumulativeSec;
         } else {
-          const offsetMinutes = withinBurstIndex * slotSpacingMinutes;
-          const totalMin = baseMin + offsetMinutes;
-          const h = Math.floor(totalMin / 60) % 24;
-          const m = totalMin % 60;
-          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          totalSecondsOffset = withinBurstIndex * slotSpacingMinutes * 60;
         }
 
-        const slotDate = new Date(year, month - 1, day + dayIndex);
+        const slotDate = new Date(
+          year,
+          month - 1,
+          day + dayIndex + slotDayOffset,
+          baseHours || 0,
+          baseMinutes || 0,
+          0,
+          0,
+        );
+        if (totalSecondsOffset > 0) {
+          slotDate.setTime(slotDate.getTime() + totalSecondsOffset * 1000);
+        }
+
         const formattedDate = slotDate.toLocaleDateString("pt-BR", {
           day: "2-digit",
           month: "2-digit",
           year: "numeric",
         });
+
+        const h = slotDate.getHours();
+        const m = slotDate.getMinutes();
+        const s = slotDate.getSeconds();
+        if (isBurstRandomMode) {
+          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+        } else {
+          timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+        }
 
         slots.push({
           dateStr: formattedDate,
@@ -1035,6 +1074,7 @@ function BulkSchedulePage() {
           );
 
           let baseTime = "12:00";
+          let slotDayOffset = 0;
           if (isRandomTimeMode) {
             dayIndex = Math.floor(burstIndex / randomCountPerDay);
             const timeIndex = burstIndex % randomCountPerDay;
@@ -1044,10 +1084,12 @@ function BulkSchedulePage() {
             const numTimes = accountTimes.length || 1;
             dayIndex = Math.floor(burstIndex / numTimes);
             const timeIndex = burstIndex % numTimes;
-            baseTime = accountTimes[timeIndex] || "12:00";
+            baseTime = accountTimes[timeIndex]?.time || "12:00";
+            slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
           }
 
-          const baseMin = parseTimeToMinutes(baseTime);
+          const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+          let totalSecondsOffset = 0;
 
           if (isBurstRandomMode) {
             const accountDelays = stableBurstDelays[accId] || [];
@@ -1055,20 +1097,24 @@ function BulkSchedulePage() {
             for (let k = 1; k <= withinBurstIndex; k++) {
               cumulativeSec += accountDelays[k] || 36;
             }
-            const totalSec = baseMin * 60 + cumulativeSec;
-            hours = Math.floor(totalSec / 3600) % 24;
-            minutes = Math.floor((totalSec % 3600) / 60);
-            seconds = totalSec % 60;
+            totalSecondsOffset = cumulativeSec;
           } else {
-            const offsetMinutes = withinBurstIndex * slotSpacingMinutes;
-            const totalMin = baseMin + offsetMinutes;
-            hours = Math.floor(totalMin / 60) % 24;
-            minutes = totalMin % 60;
-            seconds = 0;
+            totalSecondsOffset = withinBurstIndex * slotSpacingMinutes * 60;
           }
 
           // Construct date time slot in local time representation with exact seconds
-          const scheduledDate = new Date(year, month - 1, day + dayIndex, hours, minutes, seconds, 0);
+          const scheduledDate = new Date(
+            year,
+            month - 1,
+            day + dayIndex + slotDayOffset,
+            baseHours || 0,
+            baseMinutes || 0,
+            0,
+            0,
+          );
+          if (totalSecondsOffset > 0) {
+            scheduledDate.setTime(scheduledDate.getTime() + totalSecondsOffset * 1000);
+          }
 
           // Post distribution logic based on distributionMode
           if (distributionMode === "normal") {
@@ -1761,7 +1807,7 @@ function BulkSchedulePage() {
                               const next = { ...prev };
                               selectedAccounts.forEach((id) => {
                                 if (!next[id] || next[id].length === 0) {
-                                  next[id] = [...postingTimes];
+                                  next[id] = postingTimes.map((t) => ({ time: t, dayOffset: 0 }));
                                 }
                               });
                               return next;
@@ -1923,16 +1969,23 @@ function BulkSchedulePage() {
                               </div>
 
                               <div className="flex flex-wrap items-center gap-2 pt-1">
-                                {accTimes.map((time) => (
+                                {accTimes.map((slot, sIdx) => (
                                   <span
-                                    key={time}
+                                    key={`${slot.time}-${slot.dayOffset}-${sIdx}`}
                                     className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 text-primary px-2.5 py-1 rounded-lg text-xs font-bold shadow-sm"
                                   >
                                     <Clock className="size-3 text-primary shrink-0" />
-                                    {time}
+                                    {slot.time}
+                                    {slot.dayOffset > 0 && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-extrabold border border-amber-500/30">
+                                        +{slot.dayOffset} {slot.dayOffset === 1 ? "dia" : "dias"}
+                                      </span>
+                                    )}
                                     <button
                                       type="button"
-                                      onClick={() => handleRemoveAccountTime(accId, time)}
+                                      onClick={() =>
+                                        handleRemoveAccountTime(accId, slot.time, slot.dayOffset)
+                                      }
                                       className="hover:text-destructive ml-1 text-[10px] font-extrabold cursor-pointer border-0 bg-transparent"
                                     >
                                       ×
@@ -2235,7 +2288,6 @@ function BulkSchedulePage() {
                     {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (() => {
                       const bursts = stableBurstSizes[selectedAccounts[0]];
                       const baseTimes = getAccountPostingTimes(selectedAccounts[0]);
-                      const sortedTimes = [...baseTimes].sort();
                       const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, baseTimes.length);
                       const totalDays = Math.max(1, Math.ceil(bursts.length / timesPerDay));
 
@@ -2268,7 +2320,9 @@ function BulkSchedulePage() {
                                     {dayBursts.map((sz, bIdx) => {
                                       const timeLabel = isRandomTimeMode
                                         ? `Horário ${bIdx + 1}`
-                                        : sortedTimes[bIdx] || `Horário ${bIdx + 1}`;
+                                        : baseTimes[bIdx]
+                                        ? `${baseTimes[bIdx].time}${baseTimes[bIdx].dayOffset > 0 ? ` (+${baseTimes[bIdx].dayOffset}d)` : ""}`
+                                        : `Horário ${bIdx + 1}`;
                                       return (
                                         <div key={bIdx} className="flex items-center justify-between text-muted-foreground">
                                           <span className="font-mono font-bold text-foreground/90">{timeLabel}:</span>
