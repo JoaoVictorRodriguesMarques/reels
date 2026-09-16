@@ -21,6 +21,8 @@ import {
   CheckCircle2,
   X,
   Palette,
+  Zap,
+  RotateCcw,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -208,6 +210,9 @@ function BulkSchedulePage() {
   // Posting times (HH:MM list)
   const [postingTimes, setPostingTimes] = useState<string[]>(["12:00", "18:00"]);
   const [newTime, setNewTime] = useState("");
+  const [scheduleTimeMode, setScheduleTimeMode] = useState<"same" | "individual">("same");
+  const [accountPostingTimes, setAccountPostingTimes] = useState<Record<string, string[]>>({});
+  const [accountNewTimeInput, setAccountNewTimeInput] = useState<Record<string, string>>({});
 
   // Random time scheduling states
   const [isRandomTimeMode, setIsRandomTimeMode] = useState(false);
@@ -482,6 +487,72 @@ function BulkSchedulePage() {
     setPostingTimes((prev) => prev.filter((t) => t !== timeToRemove));
   };
 
+  const getAccountPostingTimes = (accId: string): string[] => {
+    if (
+      scheduleTimeMode === "individual" &&
+      accountPostingTimes[accId] &&
+      accountPostingTimes[accId].length > 0
+    ) {
+      return [...accountPostingTimes[accId]].sort();
+    }
+    return [...postingTimes].sort();
+  };
+
+  const handleStaggerAccountPostingTimes = (offsetMinutes: number, label: string) => {
+    if (selectedAccounts.length === 0 || postingTimes.length === 0) return;
+    const sortedBaseTimes = [...postingTimes].sort();
+
+    const newMap: Record<string, string[]> = {};
+    selectedAccounts.forEach((accId, accIdx) => {
+      const shiftMin = accIdx * offsetMinutes;
+      const shiftedTimes = sortedBaseTimes.map((t) => {
+        const baseMin = parseTimeToMinutes(t);
+        const totalMin = (baseMin + shiftMin) % (24 * 60);
+        const h = Math.floor(totalMin / 60);
+        const m = totalMin % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      });
+      newMap[accId] = shiftedTimes;
+    });
+
+    setAccountPostingTimes(newMap);
+    toast.success(`Horários espaçados com sucesso a cada ${label} por conta!`);
+  };
+
+  const handleSyncPostingTimesToAll = () => {
+    if (selectedAccounts.length === 0) return;
+    const baseTimes = [...postingTimes].sort();
+    const newMap: Record<string, string[]> = {};
+    selectedAccounts.forEach((accId) => {
+      newMap[accId] = [...baseTimes];
+    });
+    setAccountPostingTimes(newMap);
+    toast.success("Horários base sincronizados para todas as contas!");
+  };
+
+  const handleAddAccountTime = (accId: string) => {
+    const timeToAdd = accountNewTimeInput[accId]?.trim();
+    if (!timeToAdd) return;
+    const current = accountPostingTimes[accId] || [...postingTimes];
+    if (current.includes(timeToAdd)) {
+      toast.error("Este horário já foi adicionado para esta conta.");
+      return;
+    }
+    const updated = [...current, timeToAdd].sort();
+    setAccountPostingTimes((prev) => ({ ...prev, [accId]: updated }));
+    setAccountNewTimeInput((prev) => ({ ...prev, [accId]: "" }));
+  };
+
+  const handleRemoveAccountTime = (accId: string, timeToRemove: string) => {
+    const current = accountPostingTimes[accId] || [...postingTimes];
+    const updated = current.filter((t) => t !== timeToRemove);
+    if (updated.length === 0) {
+      toast.error("A conta precisa ter pelo menos um horário de postagem.");
+      return;
+    }
+    setAccountPostingTimes((prev) => ({ ...prev, [accId]: updated }));
+  };
+
   const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files);
@@ -669,9 +740,11 @@ function BulkSchedulePage() {
           const timeIndex = burstIndex % randomCountPerDay;
           baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
         } else {
-          dayIndex = Math.floor(burstIndex / sortedTimes.length);
-          const timeIndex = burstIndex % sortedTimes.length;
-          baseTime = sortedTimes[timeIndex];
+          const accountTimes = getAccountPostingTimes(accId);
+          const numTimes = accountTimes.length || 1;
+          dayIndex = Math.floor(burstIndex / numTimes);
+          const timeIndex = burstIndex % numTimes;
+          baseTime = accountTimes[timeIndex] || "12:00";
         }
 
         const baseMin = parseTimeToMinutes(baseTime);
@@ -766,9 +839,23 @@ function BulkSchedulePage() {
       toast.error("Adicione pelo menos um vídeo para agendar.");
       return;
     }
-    if (!isRandomTimeMode && postingTimes.length === 0) {
-      toast.error("Configure pelo menos um horário de postagem.");
-      return;
+    if (!isRandomTimeMode) {
+      if (scheduleTimeMode === "same" && postingTimes.length === 0) {
+        toast.error("Configure pelo menos um horário de postagem.");
+        return;
+      }
+      if (scheduleTimeMode === "individual") {
+        for (const accId of selectedAccounts) {
+          const times = getAccountPostingTimes(accId);
+          if (times.length === 0) {
+            const acc = accounts.find((a) => a.id === accId);
+            toast.error(
+              `Configure pelo menos um horário para a conta @${acc?.username || "selecionada"}.`,
+            );
+            return;
+          }
+        }
+      }
     }
     if (!startDate) {
       toast.error("Selecione a data de início.");
@@ -941,9 +1028,11 @@ function BulkSchedulePage() {
             const timeIndex = burstIndex % randomCountPerDay;
             baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
           } else {
-            dayIndex = Math.floor(burstIndex / sortedTimes.length);
-            const timeIndex = burstIndex % sortedTimes.length;
-            baseTime = sortedTimes[timeIndex];
+            const accountTimes = getAccountPostingTimes(accId);
+            const numTimes = accountTimes.length || 1;
+            dayIndex = Math.floor(burstIndex / numTimes);
+            const timeIndex = burstIndex % numTimes;
+            baseTime = accountTimes[timeIndex] || "12:00";
           }
 
           const baseMin = parseTimeToMinutes(baseTime);
@@ -1628,56 +1717,244 @@ function BulkSchedulePage() {
 
               {/* Mode Specific Configuration */}
               {!isRandomTimeMode ? (
-                <div className="space-y-3">
-                  <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
-                    Horários de Postagem Fixos
-                  </Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="time"
-                      value={newTime}
-                      onChange={(e) => setNewTime(e.target.value)}
-                      className="h-10 w-36 bg-card"
-                    />
-                    <Button
-                      type="button"
-                      onClick={handleAddTime}
-                      variant="outline"
-                      className="h-10 font-bold text-xs"
-                    >
-                      <Plus className="size-4 mr-1.5" /> Adicionar Horário
-                    </Button>
-                  </div>
-
-                  {postingTimes.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {postingTimes.map((time) => (
-                          <span
-                            key={time}
-                            className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 text-primary px-2.5 py-1 rounded-lg text-xs font-bold shadow-sm"
-                          >
-                            <Clock className="size-3 text-primary shrink-0" />
-                            {time}
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveTime(time)}
-                              className="hover:text-destructive ml-1 text-[10px] font-extrabold cursor-pointer border-0 bg-transparent"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
+                <div className="space-y-4">
+                  {selectedAccounts.length > 1 && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
+                      <div>
+                        <Label className="text-xs font-bold text-foreground">
+                          Modo de Horários Fixos
+                        </Label>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          Escolha se todas as contas postarão nos mesmos horários ou se cada conta terá horários próprios.
+                        </p>
                       </div>
-                      <p className="text-[10px] text-muted-foreground italic leading-relaxed">
-                        Serão postados até {postingTimes.length} Reels por dia em cada conta,
-                        repetindo esses horários nos dias seguintes até postar todos os vídeos.
-                      </p>
+
+                      <div className="flex items-center p-1 bg-secondary/60 rounded-xl border border-border/40 shrink-0 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => setScheduleTimeMode("same")}
+                          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                            scheduleTimeMode === "same"
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          Mesmos Horários
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScheduleTimeMode("individual");
+                            setAccountPostingTimes((prev) => {
+                              const next = { ...prev };
+                              selectedAccounts.forEach((id) => {
+                                if (!next[id] || next[id].length === 0) {
+                                  next[id] = [...postingTimes];
+                                }
+                              });
+                              return next;
+                            });
+                          }}
+                          className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                            scheduleTimeMode === "individual"
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          Horários por Conta
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {scheduleTimeMode === "same" || selectedAccounts.length <= 1 ? (
+                    <div className="space-y-3">
+                      <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                        Horários de Postagem Fixos {selectedAccounts.length > 1 ? "(Para Todas as Contas)" : ""}
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="time"
+                          value={newTime}
+                          onChange={(e) => setNewTime(e.target.value)}
+                          className="h-10 w-36 bg-card"
+                        />
+                        <Button
+                          type="button"
+                          onClick={handleAddTime}
+                          variant="outline"
+                          className="h-10 font-bold text-xs"
+                        >
+                          <Plus className="size-4 mr-1.5" /> Adicionar Horário
+                        </Button>
+                      </div>
+
+                      {postingTimes.length > 0 ? (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            {postingTimes.map((time) => (
+                              <span
+                                key={time}
+                                className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 text-primary px-2.5 py-1 rounded-lg text-xs font-bold shadow-sm"
+                              >
+                                <Clock className="size-3 text-primary shrink-0" />
+                                {time}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveTime(time)}
+                                  className="hover:text-destructive ml-1 text-[10px] font-extrabold cursor-pointer border-0 bg-transparent"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground italic leading-relaxed">
+                            Serão postados até {postingTimes.length} Reels por dia em cada conta,
+                            repetindo esses horários nos dias seguintes até postar todos os vídeos.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-destructive flex items-center gap-1.5">
+                          <Info className="size-4 shrink-0" /> Adicione pelo menos um horário de
+                          postagem.
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="text-xs text-destructive flex items-center gap-1.5">
-                      <Info className="size-4 shrink-0" /> Adicione pelo menos um horário de
-                      postagem.
+                    <div className="space-y-3">
+                      {/* Quick Action Toolbar */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
+                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <Zap className="size-3.5 text-primary" /> Espaçamento automático:
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerAccountPostingTimes(15, "15 min")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +15 min
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerAccountPostingTimes(30, "30 min")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +30 min
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerAccountPostingTimes(60, "1 hora")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +1 hora
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerAccountPostingTimes(120, "2 horas")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +2 horas
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleSyncPostingTimesToAll}
+                            className="h-7 px-2.5 text-[11px] font-bold text-muted-foreground hover:text-foreground cursor-pointer flex items-center gap-1"
+                            title="Copiar os horários padrão para todas as contas"
+                          >
+                            <RotateCcw className="size-3" /> Sincronizar todas
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Account List with Individual Time Pickers */}
+                      <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                        {selectedAccounts.map((accId, idx) => {
+                          const acc = accounts.find((a) => a.id === accId);
+                          if (!acc) return null;
+                          const accTimes = getAccountPostingTimes(accId);
+
+                          return (
+                            <div
+                              key={accId}
+                              className="flex flex-col gap-2 p-3 rounded-xl border border-border/60 bg-card/60 hover:bg-card transition-colors shadow-xs"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-[10px] font-mono font-bold size-5 rounded-md bg-secondary flex items-center justify-center text-muted-foreground shrink-0 border border-border/40">
+                                    #{idx + 1}
+                                  </span>
+                                  {acc.account_categories?.color && (
+                                    <span
+                                      className="size-2.5 rounded-full shrink-0 ring-1 ring-white/10"
+                                      style={{ backgroundColor: acc.account_categories.color }}
+                                    />
+                                  )}
+                                  <span className="text-xs font-bold text-foreground truncate">
+                                    @{acc.username}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-muted-foreground font-semibold">
+                                  {accTimes.length} {accTimes.length === 1 ? "horário" : "horários"}
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                {accTimes.map((time) => (
+                                  <span
+                                    key={time}
+                                    className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 text-primary px-2.5 py-1 rounded-lg text-xs font-bold shadow-sm"
+                                  >
+                                    <Clock className="size-3 text-primary shrink-0" />
+                                    {time}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveAccountTime(accId, time)}
+                                      className="hover:text-destructive ml-1 text-[10px] font-extrabold cursor-pointer border-0 bg-transparent"
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))}
+
+                                <div className="flex items-center gap-1.5 ml-auto">
+                                  <Input
+                                    type="time"
+                                    value={accountNewTimeInput[accId] || ""}
+                                    onChange={(e) =>
+                                      setAccountNewTimeInput((prev) => ({
+                                        ...prev,
+                                        [accId]: e.target.value,
+                                      }))
+                                    }
+                                    className="h-8 w-28 text-xs bg-card"
+                                  />
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleAddAccountTime(accId)}
+                                    className="h-8 px-2.5 text-xs font-bold"
+                                  >
+                                    <Plus className="size-3.5 mr-1" /> Adicionar
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1945,8 +2222,9 @@ function BulkSchedulePage() {
                     {/* Dynamic summary of generated bursts */}
                     {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (() => {
                       const bursts = stableBurstSizes[selectedAccounts[0]];
-                      const sortedTimes = [...postingTimes].sort();
-                      const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length);
+                      const baseTimes = getAccountPostingTimes(selectedAccounts[0]);
+                      const sortedTimes = [...baseTimes].sort();
+                      const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, baseTimes.length);
                       const totalDays = Math.max(1, Math.ceil(bursts.length / timesPerDay));
 
                       return (
@@ -2060,7 +2338,13 @@ function BulkSchedulePage() {
 
                 {/* Dynamic Live Explanation Alert */}
                 {videoFiles.length > 0 && (() => {
-                  const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, postingTimes.length);
+                  const baseTimes =
+                    selectedAccounts.length > 0
+                      ? getAccountPostingTimes(selectedAccounts[0])
+                      : postingTimes;
+                  const timesPerDay = isRandomTimeMode
+                    ? randomCountPerDay
+                    : Math.max(1, baseTimes.length);
                   if (isRandomBatchSize && selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]]) {
                     const burstList = stableBurstSizes[selectedAccounts[0]];
                     const totalBursts = burstList.length;
