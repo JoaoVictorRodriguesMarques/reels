@@ -1,6 +1,17 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { Upload, Loader2, Video, ChevronDown, Instagram, CheckCircle2, Sparkles } from "lucide-react";
+import {
+  Upload,
+  Loader2,
+  Video,
+  ChevronDown,
+  Instagram,
+  CheckCircle2,
+  Sparkles,
+  Clock,
+  Zap,
+  RotateCcw,
+  Calendar as CalendarIcon,
+} from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,11 +82,45 @@ function SchedulePage() {
     const timezoneOffset = futureDate.getTimezoneOffset() * 60000;
     return new Date(futureDate.getTime() - timezoneOffset).toISOString().slice(0, 16);
   });
+  const [scheduleTimeMode, setScheduleTimeMode] = useState<"same" | "individual">("same");
+  const [accountScheduledAt, setAccountScheduledAt] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
+
+  const toLocalISOString = (date: Date): string => {
+    const tzOffset = date.getTimezoneOffset() * 60_000;
+    return new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
+  };
+
+  const handleStaggerTimes = (intervalMinutes: number, label: string) => {
+    if (accountIds.length === 0) return;
+    const baseIso = accountScheduledAt[accountIds[0]] || scheduledAt;
+    const baseDate = new Date(baseIso);
+    if (isNaN(baseDate.getTime())) return;
+
+    const newMap: Record<string, string> = {};
+    accountIds.forEach((id, idx) => {
+      const nextDate = new Date(baseDate.getTime() + idx * intervalMinutes * 60_000);
+      newMap[id] = toLocalISOString(nextDate);
+    });
+
+    setAccountScheduledAt(newMap);
+    toast.success(`Horários espaçados com sucesso a cada ${label}!`);
+  };
+
+  const handleCopyFirstToAll = () => {
+    if (accountIds.length === 0) return;
+    const baseIso = accountScheduledAt[accountIds[0]] || scheduledAt;
+    const newMap: Record<string, string> = {};
+    accountIds.forEach((id) => {
+      newMap[id] = baseIso;
+    });
+    setAccountScheduledAt(newMap);
+    toast.success("Data e hora sincronizadas para todas as contas!");
+  };
 
   useEffect(() => {
     supabase
@@ -201,12 +246,20 @@ function SchedulePage() {
         coverUrl = coverUpload.publicUrl;
       }
 
-      const scheduledDate =
-        publishMode === "now" ? new Date().toISOString() : new Date(scheduledAt).toISOString();
-
       const postsToInsert: any[] = [];
 
       accountIds.forEach((accId) => {
+        let accDateStr = scheduledAt;
+        if (publishMode === "schedule") {
+          if (scheduleTimeMode === "individual" && accountScheduledAt[accId]) {
+            accDateStr = accountScheduledAt[accId];
+          } else {
+            accDateStr = scheduledAt;
+          }
+        }
+        const scheduledDate =
+          publishMode === "now" ? new Date().toISOString() : new Date(accDateStr).toISOString();
+
         if (distributionMode === "normal") {
           postsToInsert.push({
             user_id: uid,
@@ -536,9 +589,178 @@ function SchedulePage() {
           </div>
 
           {publishMode === "schedule" && (
-            <div className="space-y-2 flex flex-col">
-              <Label className="text-sm font-bold">Data e hora</Label>
-              <DateTimePicker value={scheduledAt} onChange={setScheduledAt} min={minDateTime} />
+            <div className="space-y-4 pt-1">
+              {accountIds.length > 1 ? (
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-1">
+                    <div>
+                      <Label className="text-sm font-bold text-foreground flex items-center gap-1.5">
+                        <Clock className="size-4 text-primary" /> Programação de Horários
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Escolha se todas as {accountIds.length} contas postarão no mesmo horário ou em horários diferentes.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center p-1 bg-secondary/60 rounded-xl border border-border/40 shrink-0 self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setScheduleTimeMode("same")}
+                        className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                          scheduleTimeMode === "same"
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Mesmo Horário
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleTimeMode("individual");
+                          setAccountScheduledAt((prev) => {
+                            const next = { ...prev };
+                            accountIds.forEach((id) => {
+                              if (!next[id]) {
+                                next[id] = scheduledAt;
+                              }
+                            });
+                            return next;
+                          });
+                        }}
+                        className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                          scheduleTimeMode === "individual"
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Horários por Conta
+                      </button>
+                    </div>
+                  </div>
+
+                  {scheduleTimeMode === "same" ? (
+                    <div className="space-y-2 flex flex-col pt-1">
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Data e hora para todas as {accountIds.length} contas
+                      </Label>
+                      <DateTimePicker value={scheduledAt} onChange={setScheduledAt} min={minDateTime} />
+                    </div>
+                  ) : (
+                    <div className="space-y-3 pt-1">
+                      {/* Quick Action Toolbar */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
+                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <Zap className="size-3.5 text-primary" /> Espaçamento automático:
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerTimes(15, "15 minutos")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +15 min
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerTimes(30, "30 minutos")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +30 min
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerTimes(60, "1 hora")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +1 hora
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerTimes(120, "2 horas")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +2 horas
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStaggerTimes(180, "3 horas")}
+                            className="h-7 px-2.5 text-[11px] font-bold border-border/60 hover:bg-secondary cursor-pointer"
+                          >
+                            +3 horas
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCopyFirstToAll}
+                            className="h-7 px-2.5 text-[11px] font-bold text-muted-foreground hover:text-foreground cursor-pointer flex items-center gap-1"
+                            title="Copiar a data/hora da 1ª conta para todas as outras"
+                          >
+                            <RotateCcw className="size-3" /> Sincronizar todas
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Account List with Individual DateTimePickers */}
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                        {accountIds.map((accId, idx) => {
+                          const acc = accounts.find((a) => a.id === accId);
+                          if (!acc) return null;
+                          const currentVal = accountScheduledAt[accId] || scheduledAt;
+
+                          return (
+                            <div
+                              key={accId}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl border border-border/60 bg-card/60 hover:bg-card transition-colors shadow-xs"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="text-[10px] font-mono font-bold size-5 rounded-md bg-secondary flex items-center justify-center text-muted-foreground shrink-0 border border-border/40">
+                                  #{idx + 1}
+                                </span>
+                                {acc.account_categories?.color && (
+                                  <span
+                                    className="size-2.5 rounded-full shrink-0 ring-1 ring-white/10"
+                                    style={{ backgroundColor: acc.account_categories.color }}
+                                  />
+                                )}
+                                <span className="text-xs font-bold text-foreground truncate">
+                                  @{acc.username}
+                                </span>
+                              </div>
+
+                              <div className="w-full sm:w-64 shrink-0">
+                                <DateTimePicker
+                                  value={currentVal}
+                                  onChange={(val) =>
+                                    setAccountScheduledAt((prev) => ({ ...prev, [accId]: val }))
+                                  }
+                                  min={minDateTime}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 flex flex-col">
+                  <Label className="text-sm font-bold">Data e hora</Label>
+                  <DateTimePicker value={scheduledAt} onChange={setScheduledAt} min={minDateTime} />
+                </div>
+              )}
             </div>
           )}
 
