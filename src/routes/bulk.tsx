@@ -220,6 +220,7 @@ function BulkSchedulePage() {
   const [accountPostingTimes, setAccountPostingTimes] = useState<Record<string, AccountTimeSlot[]>>({});
   const [accountNewTimeInput, setAccountNewTimeInput] = useState<Record<string, string>>({});
   const [accountsPerSlot, setAccountsPerSlot] = useState<number>(1);
+  const [accountJitterMinutes, setAccountJitterMinutes] = useState<number>(2);
   const [lastStaggerInterval, setLastStaggerInterval] = useState<{ minutes: number; label: string }>({
     minutes: 120,
     label: "2 horas",
@@ -516,6 +517,7 @@ function BulkSchedulePage() {
     offsetMinutes: number,
     label: string,
     overrideAccountsPerSlot?: number,
+    overrideJitterMinutes?: number,
   ) => {
     if (selectedAccounts.length === 0) return;
     const firstAccId = selectedAccounts[0];
@@ -526,6 +528,7 @@ function BulkSchedulePage() {
     }
 
     const currentAccountsPerSlot = Math.max(1, overrideAccountsPerSlot ?? accountsPerSlot);
+    const currentJitter = overrideJitterMinutes ?? accountJitterMinutes;
     setLastStaggerInterval({ minutes: offsetMinutes, label });
 
     const sortedBaseSlots = [...baseSlots].sort((a, b) => {
@@ -536,7 +539,10 @@ function BulkSchedulePage() {
     const newMap: Record<string, AccountTimeSlot[]> = {};
     selectedAccounts.forEach((accId, accIdx) => {
       const stepGroup = Math.floor(accIdx / currentAccountsPerSlot);
-      const shiftMin = stepGroup * offsetMinutes;
+      const withinGroupIdx = accIdx % currentAccountsPerSlot;
+      const withinGroupShift = currentAccountsPerSlot > 1 ? withinGroupIdx * currentJitter : 0;
+      const shiftMin = stepGroup * offsetMinutes + withinGroupShift;
+
       const shiftedSlots = sortedBaseSlots.map((slot) => {
         const baseMin = parseTimeToMinutes(slot.time) + slot.dayOffset * 24 * 60;
         const totalMin = baseMin + shiftMin;
@@ -554,8 +560,10 @@ function BulkSchedulePage() {
     if (currentAccountsPerSlot === 1) {
       toast.success(`Horários espaçados a cada ${label} baseados na 1ª conta!`);
     } else {
+      const jitterText =
+        currentJitter > 0 ? ` com variação anti-spam de ${currentJitter} min entre contas` : "";
       toast.success(
-        `Horários espaçados a cada ${label} (${currentAccountsPerSlot} contas por horário)!`,
+        `Horários espaçados a cada ${label} (${currentAccountsPerSlot} contas por janela${jitterText})!`,
       );
     }
   };
@@ -567,6 +575,17 @@ function BulkSchedulePage() {
       lastStaggerInterval.minutes,
       lastStaggerInterval.label,
       validCount,
+      accountJitterMinutes,
+    );
+  };
+
+  const handleChangeJitter = (newJitter: number) => {
+    setAccountJitterMinutes(newJitter);
+    handleStaggerAccountPostingTimes(
+      lastStaggerInterval.minutes,
+      lastStaggerInterval.label,
+      accountsPerSlot,
+      newJitter,
     );
   };
 
@@ -2036,6 +2055,43 @@ function BulkSchedulePage() {
                             </div>
                           </div>
                         </div>
+
+                        {/* Anti-Spam Jitter variation between accounts of the same group */}
+                        {accountsPerSlot > 1 && (
+                          <div className="pt-2 border-t border-border/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-500/5 -mx-3 -mb-3 p-3 rounded-b-xl">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                                <ShieldCheck className="size-3.5 text-amber-400 shrink-0" /> Variação Anti-Spam entre contas:
+                              </span>
+                              <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                                (evita chamadas simultâneas na API da Meta)
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1">
+                              {[
+                                { label: "+1 min", val: 1 },
+                                { label: "+2 min (Recomendado)", val: 2 },
+                                { label: "+3 min", val: 3 },
+                                { label: "+5 min", val: 5 },
+                                { label: "0 min (Exato)", val: 0 },
+                              ].map((opt) => (
+                                <button
+                                  key={opt.val}
+                                  type="button"
+                                  onClick={() => handleChangeJitter(opt.val)}
+                                  className={`px-2 py-0.5 text-[10px] rounded-md font-bold transition-all cursor-pointer border ${
+                                    accountJitterMinutes === opt.val
+                                      ? "bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-xs"
+                                      : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary"
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Account List with Individual Time Pickers */}
