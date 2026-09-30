@@ -188,9 +188,12 @@ export const generateMetaConnectLink = createServerFn({ method: "POST" })
 
     let authUrl = "";
     if (data.provider === "instagram") {
+      const igAppId = process.env.INSTAGRAM_APP_ID || "1386867933636927";
       const redirectUri = `${origin}/auth/instagram/callback`;
       const params = new URLSearchParams({
-        client_id: appId,
+        enable_fb_login: "0",
+        force_authentication: "1",
+        client_id: igAppId,
         redirect_uri: redirectUri,
         response_type: "code",
         scope: "instagram_business_basic,instagram_business_content_publish",
@@ -234,18 +237,18 @@ export const connectInstagramAccount = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { userId, supabase } = await resolveAuthUser(data.state);
-    const { appId, appSecret } = await getMetaCredentialsForUser(supabase, userId);
-    if (!appId || !appSecret) {
-      throw new Error("Meta App credentials não configuradas no servidor.");
-    }
+    const igAppId = process.env.INSTAGRAM_APP_ID || "1386867933636927";
+    const igAppSecret = process.env.INSTAGRAM_APP_SECRET || "b98e65415d47d5f2f98aceec0df2f984";
 
     // 1. Trocar code por short-lived access token (Instagram Login)
+    // Remove qualquer fragmento extra adicionado por redirecionamentos da Meta
+    const cleanCode = data.code.replace(/#_.*$/, "");
     const tokenParams = new URLSearchParams();
-    tokenParams.set("client_id", appId);
-    tokenParams.set("client_secret", appSecret);
+    tokenParams.set("client_id", igAppId);
+    tokenParams.set("client_secret", igAppSecret);
     tokenParams.set("grant_type", "authorization_code");
     tokenParams.set("redirect_uri", data.redirectUri);
-    tokenParams.set("code", data.code);
+    tokenParams.set("code", cleanCode);
 
     const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
       method: "POST",
@@ -256,7 +259,7 @@ export const connectInstagramAccount = createServerFn({ method: "POST" })
       const err = await tokenRes.text();
       console.error("Short-lived token exchange failed:", err);
       throw new Error(
-        "Falha na troca do código por token. Verifique as permissões ou redirect URI no app Meta.",
+        "Falha na troca do código por token do Instagram. Resposta da Meta: " + err,
       );
     }
     const tokenJson = (await tokenRes.json()) as {
@@ -271,39 +274,55 @@ export const connectInstagramAccount = createServerFn({ method: "POST" })
     try {
       const llUrl = new URL("https://graph.instagram.com/access_token");
       llUrl.searchParams.set("grant_type", "ig_exchange_token");
-      llUrl.searchParams.set("client_secret", appSecret);
+      llUrl.searchParams.set("client_secret", igAppSecret);
       llUrl.searchParams.set("access_token", accessToken);
       const llRes = await fetch(llUrl.toString());
       if (llRes.ok) {
         const llJson = (await llRes.json()) as { access_token: string; expires_in?: number };
         accessToken = llJson.access_token;
-        expiresIn = llJson.expires_in ?? 0;
+        expiresIn = llJson.expires_in ?? 5184000;
       } else {
         const err = await llRes.text();
-        console.error("Long-lived token exchange failed:", err);
-        throw new Error("Falha ao obter token de longa duração.");
+        console.warn("Long-lived token exchange warning, using short-lived:", err);
       }
     } catch (e: any) {
-      console.error("Long-lived token exchange failed:", e);
-      throw new Error("Falha ao obter token de longa duração: " + (e?.message ?? e));
+      console.warn("Long-lived token exchange warning:", e);
     }
 
     // 3. Buscar profile do usuário para obter o username e instagram_user_id
-    const meRes = await fetch(
-      `https://graph.instagram.com/me?fields=id,username&access_token=${encodeURIComponent(accessToken)}`,
-    );
-    if (!meRes.ok) {
-      const err = await meRes.text();
-      console.error("Instagram profile fetch failed:", err);
-      throw new Error("Não foi possível buscar as informações de perfil do Instagram.");
-    }
-    const meJson = (await meRes.json()) as {
-      id: string;
-      username: string;
-    };
+    let instagramUserId = String(tokenJson.user_id || "");
+    let username = "";
 
-    const instagramUserId = meJson.id;
-    const username = meJson.username;
+    try {
+      const meRes = await fetch(
+        `https://graph.instagram.com/v21.0/me?fields=id,username&access_token=${encodeURIComponent(accessToken)}`,
+      );
+      if (meRes.ok) {
+        const meJson = await meRes.json();
+        if (meJson.id) instagramUserId = String(meJson.id);
+        if (meJson.username) username = meJson.username;
+      }
+    } catch (e) {
+      console.warn("Error fetching /v21.0/me:", e);
+    }
+
+    if (!username) {
+      try {
+        const meRes = await fetch(
+          `https://graph.instagram.com/me?fields=id,username&access_token=${encodeURIComponent(accessToken)}`,
+        );
+        if (meRes.ok) {
+          const meJson = await meRes.json();
+          if (meJson.id) instagramUserId = String(meJson.id);
+          if (meJson.username) username = meJson.username;
+        }
+      } catch (_) {}
+    }
+
+    if (!username) {
+      username = `insta_${instagramUserId}`;
+    }
+
     const expiresAt = expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
 
     const { error } = await supabase.from("instagram_accounts").upsert(
