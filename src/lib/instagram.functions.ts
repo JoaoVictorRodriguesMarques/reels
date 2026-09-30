@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
@@ -50,6 +51,110 @@ export async function getMetaCredentialsForUser(supabase: any, userId: string) {
   return { appId: cleanedAppId, appSecret, profile };
 }
 
+// ─── Token de Estado Seguro para Dolphin / Anti-Detect ────────────────────────
+export async function createSecureStateToken(userId: string, expiresInHours = 168): Promise<string> {
+  const crypto = await import("crypto");
+  const expiresAt = Date.now() + Math.max(1, expiresInHours) * 3600 * 1000;
+  const payload = `${userId}:${expiresAt}`;
+  const secret =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.META_APP_SECRET ||
+    "reelary_secure_state_secret_2026";
+  const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  return `${Buffer.from(payload).toString("base64url")}.${signature}`;
+}
+
+export async function verifySecureStateToken(token: string): Promise<{
+  valid: boolean;
+  userId?: string;
+  expiresAt?: number;
+  error?: string;
+}> {
+  try {
+    if (!token || typeof token !== "string") {
+      return { valid: false, error: "Token de estado não fornecido." };
+    }
+    const parts = token.split(".");
+    if (parts.length !== 2) {
+      return { valid: false, error: "Formato de token de estado inválido." };
+    }
+    const [b64Payload, signature] = parts;
+    const payload = Buffer.from(b64Payload, "base64url").toString("utf-8");
+    const [userId, expiresAtStr] = payload.split(":");
+    if (!userId || !expiresAtStr) {
+      return { valid: false, error: "Conteúdo do token inválido." };
+    }
+    const expiresAt = parseInt(expiresAtStr, 10);
+    if (isNaN(expiresAt) || Date.now() > expiresAt) {
+      return { valid: false, error: "O link de autorização expirou. Gere um novo link no painel." };
+    }
+    const crypto = await import("crypto");
+    const secret =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.META_APP_SECRET ||
+      "reelary_secure_state_secret_2026";
+    const expectedSignature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+    if (signature !== expectedSignature) {
+      return { valid: false, error: "Assinatura do token de estado inválida." };
+    }
+    return { valid: true, userId, expiresAt };
+  } catch (e: any) {
+    return { valid: false, error: "Erro na verificação do token: " + (e?.message ?? e) };
+  }
+}
+
+async function resolveAuthUser(stateToken?: string): Promise<{ userId: string; supabase: any }> {
+  // 1. Prioridade 1: Se um stateToken foi passado (fluxo Dolphin / Navegador Externo)
+  if (stateToken) {
+    const verified = await verifySecureStateToken(stateToken);
+    if (verified.valid && verified.userId) {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      return { userId: verified.userId, supabase: supabaseAdmin };
+    }
+    console.warn("[Auth] Invalid or expired state token:", verified.error);
+  }
+
+  // 2. Prioridade 2: Cabeçalho de autorização Bearer da sessão Supabase
+  try {
+    const request = getRequest();
+    const authHeader = request?.headers?.get("authorization");
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.replace("Bearer ", "");
+      const SUPABASE_URL =
+        process.env.SUPABASE_URL ||
+        import.meta.env.VITE_SUPABASE_URL ||
+        "https://mbvjnqaufjykgpjkudju.supabase.co";
+      const SUPABASE_PUBLISHABLE_KEY =
+        process.env.SUPABASE_PUBLISHABLE_KEY ||
+        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1idmpucWF1Zmp5a2dwamt1ZGp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2ODEyNjgsImV4cCI6MjEwMzI1NzI2OH0.DoGk9MP_bgMg0ewqy3ftJFRc67wUwE0EFmukMbi8HKo";
+
+      const { createClient } = await import("@supabase/supabase-js");
+      const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+        global: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        auth: {
+          storage: undefined,
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      });
+
+      const { data, error } = await supabase.auth.getClaims(token);
+      if (!error && data?.claims?.sub) {
+        return { userId: data.claims.sub, supabase };
+      }
+    }
+  } catch (err) {
+    console.error("[Auth] Error parsing authorization header:", err);
+  }
+
+  throw new Error("Não autorizado: Sessão não encontrada e link de conexão inválido ou expirado.");
+}
+
 // Returns the public Meta App ID and profile so the client can build the OAuth URL.
 export const getMetaAppId = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -59,21 +164,76 @@ export const getMetaAppId = createServerFn({ method: "GET" })
     return { appId, profile };
   });
 
-// ─── Método 1 (Instagram Login direto) ──────────────────────────────────────────
-// Exchanges the OAuth `code` for an access_token, fetches the IG account
-// info, and persists the connection in `instagram_accounts`.
-export const connectInstagramAccount = createServerFn({ method: "POST" })
+// Gera link de autorização assinado para colar no Dolphin / Navegador Anti-Detect
+export const generateMetaConnectLink = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) =>
     z
       .object({
-        code: z.string().min(1).max(2000),
-        redirectUri: z.string().url().max(500),
+        provider: z.enum(["facebook", "instagram"]).default("facebook"),
+        origin: z.string().optional(),
+        expiresInHours: z.number().min(1).max(720).default(168),
       })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
+    const { appId, profile } = await getMetaCredentialsForUser(supabase, userId);
+    if (!appId) {
+      throw new Error("Meta App ID não configurado no servidor.");
+    }
+
+    const stateToken = await createSecureStateToken(userId, data.expiresInHours);
+    const origin = (data.origin || "https://reelary-2-steel.vercel.app").replace(/\/+$/, "");
+
+    let authUrl = "";
+    if (data.provider === "instagram") {
+      const redirectUri = `${origin}/auth/instagram/callback`;
+      const params = new URLSearchParams({
+        client_id: appId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: "instagram_business_basic,instagram_business_content_publish",
+        state: stateToken,
+      });
+      authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`;
+    } else {
+      const redirectUri = `${origin}/auth/facebook/callback`;
+      const params = new URLSearchParams({
+        client_id: appId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope:
+          "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management",
+        state: stateToken,
+      });
+      authUrl = `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
+    }
+
+    return {
+      authUrl,
+      stateToken,
+      appId,
+      profile,
+      expiresInHours: data.expiresInHours,
+    };
+  });
+
+// ─── Método 1 (Instagram Login direto) ──────────────────────────────────────────
+// Exchanges the OAuth `code` for an access_token, fetches the IG account
+// info, and persists the connection in `instagram_accounts`.
+export const connectInstagramAccount = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    z
+      .object({
+        code: z.string().min(1).max(2000),
+        redirectUri: z.string().url().max(500),
+        state: z.string().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { userId, supabase } = await resolveAuthUser(data.state);
     const { appId, appSecret } = await getMetaCredentialsForUser(supabase, userId);
     if (!appId || !appSecret) {
       throw new Error("Meta App credentials não configuradas no servidor.");
@@ -177,17 +337,17 @@ export const connectInstagramAccount = createServerFn({ method: "POST" })
 // Exchanges Facebook OAuth `code` for access_token, finds the user's Facebook
 // Page, resolves the linked Instagram Business account, and persists it.
 export const connectFacebookAccount = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
   .inputValidator((input) =>
     z
       .object({
         code: z.string().min(1).max(2000),
         redirectUri: z.string().url().max(500),
+        state: z.string().optional(),
       })
       .parse(input),
   )
-  .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
+  .handler(async ({ data }) => {
+    const { userId, supabase } = await resolveAuthUser(data.state);
     const { appId, appSecret } = await getMetaCredentialsForUser(supabase, userId);
     if (!appId || !appSecret) {
       throw new Error("Meta App credentials não configuradas no servidor.");

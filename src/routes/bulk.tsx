@@ -549,7 +549,7 @@ function BulkSchedulePage() {
         const dayOffset = Math.floor(totalMin / (24 * 60));
         const clockMin = totalMin % (24 * 60);
         const h = Math.floor(clockMin / 60);
-        const m = totalMin % 60;
+        const m = clockMin % 60;
         const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         return { time, dayOffset };
       });

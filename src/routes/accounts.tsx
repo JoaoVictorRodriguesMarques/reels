@@ -15,6 +15,15 @@ import {
   Palette,
   Check,
   Search,
+  Globe,
+  Copy,
+  Link2,
+  ShieldCheck,
+  RefreshCw,
+  ExternalLink,
+  Sparkles,
+  CheckCircle2,
+  Info,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -37,7 +46,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { buildInstagramAuthUrl, buildFacebookAuthUrl } from "@/lib/instagram";
-import { getMetaAppId } from "@/lib/instagram.functions";
+import { getMetaAppId, generateMetaConnectLink } from "@/lib/instagram.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/accounts")({
@@ -137,7 +146,17 @@ function AccountsPage() {
   const [manualAccessToken, setManualAccessToken] = useState("");
   const [savingManual, setSavingManual] = useState(false);
 
+  // Dolphin / Anti-Detect link modal state
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkProvider, setLinkProvider] = useState<"facebook" | "instagram">("facebook");
+  const [linkValidityHours, setLinkValidityHours] = useState(168); // 7 days default
+  const [generatedLinkUrl, setGeneratedLinkUrl] = useState("");
+  const [generatingLink, setGeneratingLink] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [newAccountsInSession, setNewAccountsInSession] = useState<string[]>([]);
+
   const fetchAppId = useServerFn(getMetaAppId);
+  const generateLinkFn = useServerFn(generateMetaConnectLink);
 
   // ─── Data Loading ───────────────────────────────────────────────────────────
 
@@ -194,6 +213,78 @@ function AccountsPage() {
     return () => window.removeEventListener("active-account-changed", handleActiveAccountChange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ─── Realtime / Polling when Dolphin Link modal is open ──────────────────
+  useEffect(() => {
+    if (!showLinkModal) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data, error } = await supabase
+          .from("instagram_accounts")
+          .select(
+            "id, username, instagram_user_id, token_expires_at, created_at, hidden, category_id, token_invalid, account_categories(id, name, color)",
+          )
+          .order("created_at", { ascending: false });
+
+        if (!error && data) {
+          const currentIds = new Set(accounts.map((a) => a.id));
+          const newlyAdded = data.filter((a) => !currentIds.has(a.id));
+          if (newlyAdded.length > 0) {
+            newlyAdded.forEach((a) => {
+              toast.success(`🎉 Nova conta @${a.username} conectada pelo Dolphin com sucesso!`);
+            });
+            setNewAccountsInSession((prev) => [
+              ...new Set([...prev, ...newlyAdded.map((a) => a.username)]),
+            ]);
+            setAccounts((data as any) ?? []);
+
+            const storedId = localStorage.getItem("active_ig_account_id");
+            if (!storedId && data.length > 0) {
+              localStorage.setItem("active_ig_account_id", data[0].id);
+              setActiveAccountId(data[0].id);
+              window.dispatchEvent(new Event("active-account-changed"));
+            }
+          }
+        }
+      } catch (_) {}
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [showLinkModal, accounts]);
+
+  async function fetchGeneratedLink(provider = linkProvider, validity = linkValidityHours) {
+    setGeneratingLink(true);
+    try {
+      const res = await generateLinkFn({
+        data: {
+          provider,
+          expiresInHours: validity,
+          origin: window.location.origin,
+        },
+      });
+      setGeneratedLinkUrl(res.authUrl);
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao gerar link de conexão");
+    } finally {
+      setGeneratingLink(false);
+    }
+  }
+
+  function openLinkModal() {
+    setShowLinkModal(true);
+    setCopiedLink(false);
+    setNewAccountsInSession([]);
+    fetchGeneratedLink(linkProvider, linkValidityHours);
+  }
+
+  function handleCopyLink() {
+    if (!generatedLinkUrl) return;
+    navigator.clipboard.writeText(generatedLinkUrl);
+    setCopiedLink(true);
+    toast.success("Link copiado! Cole dentro do seu perfil do Dolphin.");
+    setTimeout(() => setCopiedLink(false), 2500);
+  }
 
   // ─── Account Actions ────────────────────────────────────────────────────────
 
@@ -508,6 +599,14 @@ function AccountsPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <Button
+            onClick={openLinkModal}
+            className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:via-blue-500 hover:to-indigo-500 text-white border-0 font-semibold rounded-xl h-10 gap-2 shadow-md hover:shadow-lg transition"
+            title="Gerar link para colar no Dolphin Browser / Anti-Detect"
+          >
+            <Globe className="size-4 text-cyan-200" />
+            <span>Link Dolphin / Anti-Detect</span>
+          </Button>
+          <Button
             onClick={openCreateCategory}
             variant="outline"
             className="border-border/60 hover:bg-secondary font-semibold rounded-xl h-10 gap-2"
@@ -626,10 +725,19 @@ function AccountsPage() {
           </p>
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
             <Button
-              onClick={connect}
-              className="bg-gradient-brand text-primary-foreground border-0 font-semibold shadow-glow w-full sm:w-auto"
+              onClick={openLinkModal}
+              className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:via-blue-500 hover:to-indigo-500 text-white border-0 font-semibold shadow-md rounded-xl w-full sm:w-auto h-10 px-4"
             >
-              <Instagram className="size-4 mr-2" /> Conectar Conta Comercial
+              <Globe className="size-4 mr-2 text-cyan-200" /> Link Dolphin / Anti-Detect
+            </Button>
+            <Button
+              onClick={connectFacebook}
+              className="bg-[#1877F2] text-white border-0 hover:bg-[#166FE5] font-semibold rounded-xl w-full sm:w-auto h-10 px-4 shadow-sm"
+            >
+              <svg className="size-4 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+              </svg>
+              Conectar via Facebook
             </Button>
             <Button
               onClick={() => setShowManualModal(true)}
@@ -1152,6 +1260,244 @@ function AccountsPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Dolphin / Anti-Detect Connection Dialog ────────────────────────── */}
+      <Dialog open={showLinkModal} onOpenChange={setShowLinkModal}>
+        <DialogContent className="sm:max-w-xl bg-card/95 border border-border/70 rounded-3xl p-6 md:p-7 backdrop-blur-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                <ShieldCheck className="size-3.5" /> 100% Isolado & Anti-Detect
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                <Sparkles className="size-3.5" /> Dolphin • AdsPower • Proxies
+              </span>
+            </div>
+            <DialogTitle className="text-2xl font-extrabold flex items-center gap-2 text-foreground">
+              <Globe className="size-6 text-cyan-400" />
+              Conectar via Link no Dolphin
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              Gere um link seguro de autorização da Meta para colar dentro do perfil do Dolphin Browser ou navegador com proxy. Você não precisa fazer login no Reelary dentro do Dolphin!
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6 mt-4">
+            {/* Step 1: Provider selection */}
+            <div className="space-y-2.5">
+              <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                1. Método de Autorização
+              </Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLinkProvider("facebook");
+                    fetchGeneratedLink("facebook", linkValidityHours);
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between relative ${
+                    linkProvider === "facebook"
+                      ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/40"
+                      : "border-border/60 bg-secondary/20 hover:bg-secondary/40 hover:border-border"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                      <svg className="size-4 text-[#1877F2]" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+                      </svg>
+                      Facebook (Páginas & IG)
+                    </div>
+                    {linkProvider === "facebook" && <Check className="size-4 text-primary" />}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+                    Recomendado. Conecta via Página do Facebook vinculada ao Instagram Business.
+                  </span>
+                  <span className="mt-2 text-[10px] font-bold text-success bg-success/10 border border-success/20 px-2 py-0.5 rounded-md w-fit">
+                    Mais Estável
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLinkProvider("instagram");
+                    fetchGeneratedLink("instagram", linkValidityHours);
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between relative ${
+                    linkProvider === "instagram"
+                      ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/40"
+                      : "border-border/60 bg-secondary/20 hover:bg-secondary/40 hover:border-border"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
+                      <Instagram className="size-4 text-pink-500" />
+                      Instagram Direto
+                    </div>
+                    {linkProvider === "instagram" && <Check className="size-4 text-primary" />}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+                    Login direto com usuário e senha do Instagram comercial.
+                  </span>
+                  <span className="mt-2 text-[10px] font-bold text-muted-foreground bg-secondary px-2 py-0.5 rounded-md w-fit">
+                    OAuth Básico
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Step 2: Validity Selector */}
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                2. Validade do Link
+              </Label>
+              <div className="flex gap-2">
+                {[
+                  { hours: 24, label: "24 horas" },
+                  { hours: 168, label: "7 dias (Recomendado)" },
+                  { hours: 720, label: "30 dias" },
+                ].map((val) => (
+                  <button
+                    key={val.hours}
+                    type="button"
+                    onClick={() => {
+                      setLinkValidityHours(val.hours);
+                      fetchGeneratedLink(linkProvider, val.hours);
+                    }}
+                    className={`flex-1 py-2 px-3 text-xs font-semibold rounded-xl border transition cursor-pointer ${
+                      linkValidityHours === val.hours
+                        ? "border-primary bg-primary/15 text-primary font-bold"
+                        : "border-border/60 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                    }`}
+                  >
+                    {val.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Step 3: Generated Link & Copy Button */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  3. Link de Conexão Gerado
+                </Label>
+                <button
+                  type="button"
+                  onClick={() => fetchGeneratedLink(linkProvider, linkValidityHours)}
+                  className="text-[11px] text-primary hover:underline flex items-center gap-1 cursor-pointer"
+                  disabled={generatingLink}
+                >
+                  <RefreshCw className={`size-3 ${generatingLink ? "animate-spin" : ""}`} />
+                  Gerar novo token
+                </button>
+              </div>
+
+              <div className="relative">
+                <div className="p-3 bg-secondary/40 border border-border/80 rounded-2xl font-mono text-xs text-foreground/90 break-all select-all min-h-[58px] flex items-center pr-28">
+                  {generatingLink ? (
+                    <span className="text-muted-foreground italic flex items-center gap-2">
+                      <RefreshCw className="size-3.5 animate-spin text-primary" /> Gerando link seguro assinado...
+                    </span>
+                  ) : generatedLinkUrl ? (
+                    <span className="line-clamp-2 text-xs text-muted-foreground selection:bg-primary/30">
+                      {generatedLinkUrl}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">Nenhum link gerado.</span>
+                  )}
+                </div>
+
+                <Button
+                  onClick={handleCopyLink}
+                  disabled={generatingLink || !generatedLinkUrl}
+                  className={`absolute right-2 top-1/2 -translate-y-1/2 h-9 px-4 font-bold text-xs rounded-xl shadow-md transition-all ${
+                    copiedLink
+                      ? "bg-success text-success-foreground hover:bg-success"
+                      : "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white"
+                  }`}
+                >
+                  {copiedLink ? (
+                    <>
+                      <Check className="size-3.5 mr-1.5" /> Copiado!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="size-3.5 mr-1.5" /> Copiar Link
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Step-by-Step Instructions */}
+            <div className="rounded-2xl border border-border/60 bg-secondary/20 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-bold text-foreground">
+                <Info className="size-4 text-cyan-400" />
+                Como usar no Dolphin Browser / Anti-Detect:
+              </div>
+              <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside leading-relaxed pl-1">
+                <li>
+                  <strong className="text-foreground">Copie o link</strong> acima com o botão azul.
+                </li>
+                <li>
+                  <strong className="text-foreground">Abra o perfil no Dolphin</strong> com seu proxy/VPN ativo (onde o Facebook/Instagram já está logado).
+                </li>
+                <li>
+                  <strong className="text-foreground">Cole o link</strong> na barra de navegação do Dolphin e dê Enter.
+                </li>
+                <li>
+                  <strong className="text-foreground">Clique em "Continuar / Permitir"</strong> na autorização da Meta.
+                </li>
+                <li>
+                  <strong className="text-foreground">Pronto!</strong> A conta aparecerá automaticamente aqui nesta lista.
+                </li>
+              </ol>
+              <div className="pt-2 border-t border-border/40 text-[11px] text-cyan-400/90 font-medium flex items-center gap-1.5">
+                <Sparkles className="size-3.5 shrink-0" />
+                <span>
+                  <strong>Dica de Escala:</strong> Você pode colar esse <strong>mesmo link</strong> em 10, 20 ou 100 perfis do Dolphin! Cada perfil conectará a sua própria conta automaticamente.
+                </span>
+              </div>
+            </div>
+
+            {/* Live Monitoring Badge */}
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-secondary/30 border border-border/50">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex size-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                  <span className="relative inline-flex rounded-full size-2.5 bg-success"></span>
+                </span>
+                <span className="text-xs font-semibold text-foreground">
+                  {newAccountsInSession.length > 0
+                    ? `🎉 ${newAccountsInSession.length} conta(s) vinculada(s) nesta sessão!`
+                    : "Aguardando autorização no Dolphin em tempo real..."}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => load()}
+                className="h-8 text-xs font-semibold text-muted-foreground hover:text-foreground rounded-lg"
+              >
+                <RefreshCw className="size-3.5 mr-1" /> Atualizar
+              </Button>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowLinkModal(false)}
+                className="w-full border-border/80 hover:bg-secondary rounded-xl font-bold h-11"
+              >
+                Concluído / Fechar
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
