@@ -1285,67 +1285,25 @@ function AccountsPage() {
           </DialogHeader>
 
           <div className="space-y-6 mt-4">
-            {/* Step 1: Provider selection */}
-            <div className="space-y-2.5">
-              <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                1. Método de Autorização
-              </Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLinkProvider("facebook");
-                    fetchGeneratedLink("facebook", linkValidityHours);
-                  }}
-                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between relative ${
-                    linkProvider === "facebook"
-                      ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/40"
-                      : "border-border/60 bg-secondary/20 hover:bg-secondary/40 hover:border-border"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
-                      <svg className="size-4 text-[#1877F2]" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
-                      </svg>
-                      Facebook (Páginas & IG)
-                    </div>
-                    {linkProvider === "facebook" && <Check className="size-4 text-primary" />}
-                  </div>
-                  <span className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
-                    Recomendado. Conecta via Página do Facebook vinculada ao Instagram Business.
+            {/* Connection Method Banner */}
+            <div className="rounded-2xl border border-primary/30 bg-primary/10 p-4 flex items-start gap-3.5">
+              <div className="size-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0 mt-0.5">
+                <svg className="size-5 text-[#1877F2]" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+                </svg>
+              </div>
+              <div className="text-xs space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm text-foreground">
+                    Meta Business OAuth (Facebook & Instagram)
                   </span>
-                  <span className="mt-2 text-[10px] font-bold text-success bg-success/10 border border-success/20 px-2 py-0.5 rounded-md w-fit">
-                    Mais Estável
+                  <span className="text-[10px] font-bold text-success bg-success/15 border border-success/30 px-2 py-0.5 rounded-full">
+                    Oficial Meta
                   </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLinkProvider("instagram");
-                    fetchGeneratedLink("instagram", linkValidityHours);
-                  }}
-                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between relative ${
-                    linkProvider === "instagram"
-                      ? "border-primary bg-primary/10 shadow-sm ring-1 ring-primary/40"
-                      : "border-border/60 bg-secondary/20 hover:bg-secondary/40 hover:border-border"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 font-bold text-sm text-foreground">
-                      <Instagram className="size-4 text-pink-500" />
-                      Instagram Direto
-                    </div>
-                    {linkProvider === "instagram" && <Check className="size-4 text-primary" />}
-                  </div>
-                  <span className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
-                    Login direto com usuário e senha do Instagram comercial.
-                  </span>
-                  <span className="mt-2 text-[10px] font-bold text-muted-foreground bg-secondary px-2 py-0.5 rounded-md w-fit">
-                    OAuth Básico
-                  </span>
-                </button>
+                </div>
+                <p className="text-muted-foreground leading-relaxed">
+                  Conexão oficial para agendamento de Reels em contas comerciais do Instagram vinculadas a Páginas do Facebook.
+                </p>
               </div>
             </div>
 
