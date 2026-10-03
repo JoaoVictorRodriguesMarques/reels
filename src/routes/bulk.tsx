@@ -24,6 +24,7 @@ import {
   Zap,
   RotateCcw,
   Users,
+  Timer,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -226,8 +227,29 @@ function BulkSchedulePage() {
     label: "2 horas",
   });
 
+  // Schedule mode: "fixed" | "interval" | "random"
+  const [scheduleMode, setScheduleMode] = useState<"fixed" | "interval" | "random">("fixed");
+  const isRandomTimeMode = scheduleMode === "random";
+  const isIntervalMode = scheduleMode === "interval";
+
+  // Interval mode states
+  const [intervalStartTime, setIntervalStartTime] = useState("10:00");
+  const [intervalMinutes, setIntervalMinutes] = useState(120); // default 2h (120 min)
+  const [customIntervalValue, setCustomIntervalValue] = useState<number>(2);
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<"minutes" | "hours">("hours");
+
+  const formatIntervalLabel = (minutes: number) => {
+    if (minutes < 60) return `${minutes} min`;
+    if (minutes % 60 === 0) {
+      const hours = minutes / 60;
+      return `${hours} ${hours === 1 ? "hora" : "horas"}`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remMin = minutes % 60;
+    return `${hours}h ${remMin}m`;
+  };
+
   // Random time scheduling states
-  const [isRandomTimeMode, setIsRandomTimeMode] = useState(false);
   const [randomStartHour, setRandomStartHour] = useState("11:00");
   const [randomEndHour, setRandomEndHour] = useState("22:00");
   const [randomCountPerDay, setRandomCountPerDay] = useState(2);
@@ -788,7 +810,10 @@ function BulkSchedulePage() {
     if (videoFiles.length === 0 || selectedAccounts.length === 0 || !startDate) {
       return [];
     }
-    if (!isRandomTimeMode && postingTimes.length === 0) {
+    if (scheduleMode === "fixed" && postingTimes.length === 0) {
+      return [];
+    }
+    if (scheduleMode === "interval" && (!intervalStartTime || intervalMinutes <= 0)) {
       return [];
     }
 
@@ -809,7 +834,6 @@ function BulkSchedulePage() {
         if (videoIdx >= videoFiles.length) return;
 
         let timeStr = "";
-        let dayIndex = 0;
         let burstDelta: number | undefined = undefined;
 
         const { burstIndex, withinBurstIndex, burstSize, isFirstInBurst } = getBurstSlotIndices(
@@ -818,22 +842,6 @@ function BulkSchedulePage() {
           batchSize,
         );
 
-        let baseTime = "12:00";
-        let slotDayOffset = 0;
-        if (isRandomTimeMode) {
-          dayIndex = Math.floor(burstIndex / randomCountPerDay);
-          const timeIndex = burstIndex % randomCountPerDay;
-          baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
-        } else {
-          const accountTimes = getAccountPostingTimes(accId);
-          const numTimes = accountTimes.length || 1;
-          dayIndex = Math.floor(burstIndex / numTimes);
-          const timeIndex = burstIndex % numTimes;
-          baseTime = accountTimes[timeIndex]?.time || "12:00";
-          slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
-        }
-
-        const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
         let totalSecondsOffset = 0;
 
         if (isBurstRandomMode) {
@@ -851,15 +859,63 @@ function BulkSchedulePage() {
           totalSecondsOffset = withinBurstIndex * slotSpacingMinutes * 60;
         }
 
-        const slotDate = new Date(
-          year,
-          month - 1,
-          day + dayIndex + slotDayOffset,
-          baseHours || 0,
-          baseMinutes || 0,
-          0,
-          0,
-        );
+        let slotDate: Date;
+
+        if (scheduleMode === "interval") {
+          const [startH, startM] = (intervalStartTime || "10:00").split(":").map(Number);
+          const accIdx = selectedAccounts.indexOf(accId);
+          const withinGroupIdx = accountsPerSlot > 1 ? accIdx % accountsPerSlot : accIdx;
+          const accountOffsetMinutes = withinGroupIdx * accountJitterMinutes;
+
+          const totalMinutesFromStart =
+            (startH * 60 + (startM || 0)) + burstIndex * intervalMinutes + accountOffsetMinutes;
+          const dayOffset = Math.floor(totalMinutesFromStart / 1440);
+          const remainingMinutes = ((totalMinutesFromStart % 1440) + 1440) % 1440;
+          const baseHours = Math.floor(remainingMinutes / 60);
+          const baseMinutes = remainingMinutes % 60;
+
+          slotDate = new Date(
+            year,
+            month - 1,
+            day + dayOffset,
+            baseHours || 0,
+            baseMinutes || 0,
+            0,
+            0,
+          );
+        } else if (scheduleMode === "random") {
+          const dayIndex = Math.floor(burstIndex / randomCountPerDay);
+          const timeIndex = burstIndex % randomCountPerDay;
+          const baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
+          const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+          slotDate = new Date(
+            year,
+            month - 1,
+            day + dayIndex,
+            baseHours || 0,
+            baseMinutes || 0,
+            0,
+            0,
+          );
+        } else {
+          const accountTimes = getAccountPostingTimes(accId);
+          const numTimes = accountTimes.length || 1;
+          const dayIndex = Math.floor(burstIndex / numTimes);
+          const timeIndex = burstIndex % numTimes;
+          const baseTime = accountTimes[timeIndex]?.time || "12:00";
+          const slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
+          const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+          slotDate = new Date(
+            year,
+            month - 1,
+            day + dayIndex + slotDayOffset,
+            baseHours || 0,
+            baseMinutes || 0,
+            0,
+            0,
+          );
+        }
+
         if (totalSecondsOffset > 0) {
           slotDate.setTime(slotDate.getTime() + totalSecondsOffset * 1000);
         }
@@ -939,7 +995,7 @@ function BulkSchedulePage() {
       toast.error("Adicione pelo menos um vídeo para agendar.");
       return;
     }
-    if (!isRandomTimeMode) {
+    if (scheduleMode === "fixed") {
       if (scheduleTimeMode === "same" && postingTimes.length === 0) {
         toast.error("Configure pelo menos um horário de postagem.");
         return;
@@ -955,6 +1011,15 @@ function BulkSchedulePage() {
             return;
           }
         }
+      }
+    } else if (scheduleMode === "interval") {
+      if (!intervalStartTime) {
+        toast.error("Configure o horário de início da postagem por intervalo.");
+        return;
+      }
+      if (!intervalMinutes || intervalMinutes <= 0) {
+        toast.error("Defina um intervalo de tempo válido.");
+        return;
       }
     }
     if (!startDate) {
@@ -1122,22 +1187,6 @@ function BulkSchedulePage() {
             batchSize,
           );
 
-          let baseTime = "12:00";
-          let slotDayOffset = 0;
-          if (isRandomTimeMode) {
-            dayIndex = Math.floor(burstIndex / randomCountPerDay);
-            const timeIndex = burstIndex % randomCountPerDay;
-            baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
-          } else {
-            const accountTimes = getAccountPostingTimes(accId);
-            const numTimes = accountTimes.length || 1;
-            dayIndex = Math.floor(burstIndex / numTimes);
-            const timeIndex = burstIndex % numTimes;
-            baseTime = accountTimes[timeIndex]?.time || "12:00";
-            slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
-          }
-
-          const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
           let totalSecondsOffset = 0;
 
           if (isBurstRandomMode) {
@@ -1151,19 +1200,68 @@ function BulkSchedulePage() {
             totalSecondsOffset = withinBurstIndex * slotSpacingMinutes * 60;
           }
 
-          // Construct date time slot in local time representation with exact seconds
-          const scheduledDate = new Date(
-            year,
-            month - 1,
-            day + dayIndex + slotDayOffset,
-            baseHours || 0,
-            baseMinutes || 0,
-            0,
-            0,
-          );
-          if (totalSecondsOffset > 0) {
-            scheduledDate.setTime(scheduledDate.getTime() + totalSecondsOffset * 1000);
+          let slotDate: Date;
+
+          if (scheduleMode === "interval") {
+            const [startH, startM] = (intervalStartTime || "10:00").split(":").map(Number);
+            const accIdx = selectedAccounts.indexOf(accId);
+            const withinGroupIdx = accountsPerSlot > 1 ? accIdx % accountsPerSlot : accIdx;
+            const accountOffsetMinutes = withinGroupIdx * accountJitterMinutes;
+
+            const totalMinutesFromStart =
+              (startH * 60 + (startM || 0)) + burstIndex * intervalMinutes + accountOffsetMinutes;
+            const dayOffset = Math.floor(totalMinutesFromStart / 1440);
+            const remainingMinutes = ((totalMinutesFromStart % 1440) + 1440) % 1440;
+            const baseHours = Math.floor(remainingMinutes / 60);
+            const baseMinutes = remainingMinutes % 60;
+
+            slotDate = new Date(
+              year,
+              month - 1,
+              day + dayOffset,
+              baseHours || 0,
+              baseMinutes || 0,
+              0,
+              0,
+            );
+          } else if (scheduleMode === "random") {
+            const dayIndex = Math.floor(burstIndex / randomCountPerDay);
+            const timeIndex = burstIndex % randomCountPerDay;
+            const baseTime = stableRandomTimes[accId]?.[dayIndex]?.[timeIndex] || "12:00";
+            const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+            slotDate = new Date(
+              year,
+              month - 1,
+              day + dayIndex,
+              baseHours || 0,
+              baseMinutes || 0,
+              0,
+              0,
+            );
+          } else {
+            const accountTimes = getAccountPostingTimes(accId);
+            const numTimes = accountTimes.length || 1;
+            const dayIndex = Math.floor(burstIndex / numTimes);
+            const timeIndex = burstIndex % numTimes;
+            const baseTime = accountTimes[timeIndex]?.time || "12:00";
+            const slotDayOffset = accountTimes[timeIndex]?.dayOffset || 0;
+            const [baseHours, baseMinutes] = baseTime.split(":").map(Number);
+            slotDate = new Date(
+              year,
+              month - 1,
+              day + dayIndex + slotDayOffset,
+              baseHours || 0,
+              baseMinutes || 0,
+              0,
+              0,
+            );
           }
+
+          if (totalSecondsOffset > 0) {
+            slotDate.setTime(slotDate.getTime() + totalSecondsOffset * 1000);
+          }
+
+          const scheduledDate = slotDate;
 
           // Post distribution logic based on distributionMode
           if (distributionMode === "normal") {
@@ -1779,12 +1877,12 @@ function BulkSchedulePage() {
                 </Label>
 
                 {/* Mode Switcher */}
-                <div className="flex items-center p-1 bg-secondary/60 rounded-xl border border-border/40">
+                <div className="grid grid-cols-3 p-1 bg-secondary/60 rounded-xl border border-border/40 gap-1">
                   <button
                     type="button"
-                    onClick={() => setIsRandomTimeMode(false)}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      !isRandomTimeMode
+                    onClick={() => setScheduleMode("fixed")}
+                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                      scheduleMode === "fixed"
                         ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -1793,9 +1891,20 @@ function BulkSchedulePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsRandomTimeMode(true)}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      isRandomTimeMode
+                    onClick={() => setScheduleMode("interval")}
+                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                      scheduleMode === "interval"
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Timer className="size-3.5 shrink-0" /> A Cada X Tempo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleMode("random")}
+                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                      scheduleMode === "random"
                         ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -1822,8 +1931,177 @@ function BulkSchedulePage() {
                 />
               </div>
 
-              {/* Mode Specific Configuration */}
-              {!isRandomTimeMode ? (
+              {/* Mode 1: Interval Mode (A Cada X Tempo) */}
+              {scheduleMode === "interval" && (
+                <div className="space-y-4">
+                  {/* First Post Start Time and Selected Interval Summary */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="intervalStartTime"
+                        className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"
+                      >
+                        <Clock className="size-3.5 text-primary" /> Horário do 1º Post
+                      </Label>
+                      <Input
+                        type="time"
+                        id="intervalStartTime"
+                        value={intervalStartTime}
+                        onChange={(e) => setIntervalStartTime(e.target.value)}
+                        className="h-10 bg-card font-mono font-bold"
+                      />
+                      <p className="text-[10px] text-muted-foreground">
+                        Horário inicial da primeira postagem na data de início.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                        <Timer className="size-3.5 text-primary" /> Intervalo Selecionado
+                      </Label>
+                      <div className="h-10 px-3 rounded-lg border border-border/60 bg-secondary/30 flex items-center justify-between">
+                        <span className="text-xs font-bold text-foreground">
+                          A cada <strong className="text-primary font-mono text-sm">{formatIntervalLabel(intervalMinutes)}</strong>
+                        </span>
+                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                          {intervalMinutes} minutos
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Tempo de espera entre cada nova publicação.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Interval Presets & Custom Control */}
+                  <div className="space-y-3 p-3.5 rounded-xl bg-secondary/20 border border-border/40">
+                    <Label className="text-xs font-bold text-foreground flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Zap className="size-3.5 text-primary" /> Escolha o Intervalo entre Posts
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-normal">
+                        (posta continuamente enquanto houver vídeos)
+                      </span>
+                    </Label>
+
+                    {/* Preset buttons */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { label: "15 min", val: 15 },
+                        { label: "30 min", val: 30 },
+                        { label: "45 min", val: 45 },
+                        { label: "1 hora", val: 60 },
+                        { label: "1h 30m", val: 90 },
+                        { label: "2 horas", val: 120 },
+                        { label: "3 horas", val: 180 },
+                        { label: "4 horas", val: 240 },
+                        { label: "6 horas", val: 360 },
+                        { label: "8 horas", val: 480 },
+                        { label: "12 horas", val: 720 },
+                        { label: "24 horas", val: 1440 },
+                      ].map((p) => (
+                        <button
+                          key={p.val}
+                          type="button"
+                          onClick={() => {
+                            setIntervalMinutes(p.val);
+                            if (p.val % 60 === 0) {
+                              setCustomIntervalValue(p.val / 60);
+                              setCustomIntervalUnit("hours");
+                            } else {
+                              setCustomIntervalValue(p.val);
+                              setCustomIntervalUnit("minutes");
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                            intervalMinutes === p.val
+                              ? "bg-primary text-primary-foreground border-primary shadow-xs"
+                              : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary"
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Custom Interval Input */}
+                    <div className="pt-2 border-t border-border/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-muted-foreground">
+                        Ou digite um intervalo personalizado:
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10000}
+                          value={customIntervalValue}
+                          onChange={(e) => {
+                            const num = Math.max(1, parseInt(e.target.value) || 1);
+                            setCustomIntervalValue(num);
+                            setIntervalMinutes(customIntervalUnit === "hours" ? num * 60 : num);
+                          }}
+                          className="w-20 h-8 text-center font-bold text-xs bg-card"
+                        />
+                        <select
+                          value={customIntervalUnit}
+                          onChange={(e) => {
+                            const unit = e.target.value as "minutes" | "hours";
+                            setCustomIntervalUnit(unit);
+                            setIntervalMinutes(unit === "hours" ? customIntervalValue * 60 : customIntervalValue);
+                          }}
+                          className="h-8 bg-card border border-border/60 rounded-lg px-2 text-xs font-semibold text-foreground cursor-pointer"
+                        >
+                          <option value="minutes">Minutos</option>
+                          <option value="hours">Horas</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Multi-account Jitter Variation */}
+                  {selectedAccounts.length > 1 && (
+                    <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <ShieldCheck className="size-3.5 text-amber-400 shrink-0" />
+                        <div>
+                          <span className="text-xs font-bold text-amber-400 block">
+                            Variação Anti-Spam entre {selectedAccounts.length} contas:
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">
+                            Desloca cada conta em alguns minutos para evitar postagens no exato mesmo segundo.
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1 shrink-0">
+                        {[
+                          { label: "+1 min", val: 1 },
+                          { label: "+2 min (Recomendado)", val: 2 },
+                          { label: "+3 min", val: 3 },
+                          { label: "+5 min", val: 5 },
+                          { label: "0 min (Exato)", val: 0 },
+                        ].map((opt) => (
+                          <button
+                            key={opt.val}
+                            type="button"
+                            onClick={() => setAccountJitterMinutes(opt.val)}
+                            className={`px-2 py-0.5 text-[10px] rounded-md font-bold transition-all cursor-pointer border ${
+                              accountJitterMinutes === opt.val
+                                ? "bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-xs"
+                                : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Mode 2: Fixed Times */}
+              {scheduleMode === "fixed" && (
                 <div className="space-y-4">
                   {selectedAccounts.length > 1 && (
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-secondary/30 border border-border/40">
@@ -2182,7 +2460,10 @@ function BulkSchedulePage() {
                     </div>
                   )}
                 </div>
-              ) : (
+              )}
+
+              {/* Mode 3: Random Times */}
+              {scheduleMode === "random" && (
                 <div className="space-y-4">
                   <div className="grid gap-4 grid-cols-3">
                     <div className="space-y-1.5">
@@ -2446,6 +2727,25 @@ function BulkSchedulePage() {
                     {/* Dynamic summary of generated bursts */}
                     {selectedAccounts.length > 0 && stableBurstSizes[selectedAccounts[0]] && (() => {
                       const bursts = stableBurstSizes[selectedAccounts[0]];
+                      if (scheduleMode === "interval") {
+                        const totalBursts = bursts.length;
+                        return (
+                          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2 text-xs">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-amber-400 font-bold">
+                              <span className="flex items-center gap-1.5">
+                                <Timer className="size-4 shrink-0" />
+                                {totalBursts} postagens contínuas a cada {formatIntervalLabel(intervalMinutes)} ({totalCalculatedDays} {totalCalculatedDays === 1 ? "dia" : "dias"} no total):
+                              </span>
+                              <span className="text-[11px] font-mono font-bold text-amber-300">
+                                Total: {videoFiles.length} vídeos
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              Iniciando em <strong>{startDate} às {intervalStartTime}</strong>, cada postagem ocorrerá com espaçamento de <strong>{formatIntervalLabel(intervalMinutes)}</strong>, cruzando os dias continuamente.
+                            </p>
+                          </div>
+                        );
+                      }
                       const baseTimes = getAccountPostingTimes(selectedAccounts[0]);
                       const timesPerDay = isRandomTimeMode ? randomCountPerDay : Math.max(1, baseTimes.length);
                       const totalDays = Math.max(1, Math.ceil(bursts.length / timesPerDay));
@@ -2563,6 +2863,17 @@ function BulkSchedulePage() {
 
                 {/* Dynamic Live Explanation Alert */}
                 {videoFiles.length > 0 && (() => {
+                  if (scheduleMode === "interval") {
+                    return (
+                      <div className="p-2.5 rounded-lg bg-primary/[0.06] border border-primary/20 text-[11px] text-muted-foreground leading-relaxed flex items-center gap-2">
+                        <Timer className="size-4 text-primary shrink-0" />
+                        <span>
+                          Com <strong>{videoFiles.length} vídeos</strong> postando a cada <strong>{formatIntervalLabel(intervalMinutes)}</strong> ({batchSize} {batchSize === 1 ? "vídeo" : "vídeos"} por lote) a partir de <strong>{startDate} às {intervalStartTime}</strong>: cada conta postará continuamente ao longo de <strong>{totalCalculatedDays} {totalCalculatedDays === 1 ? "dia" : "dias"}</strong> até esgotar todos os vídeos.
+                        </span>
+                      </div>
+                    );
+                  }
+
                   const baseTimes =
                     selectedAccounts.length > 0
                       ? getAccountPostingTimes(selectedAccounts[0])
@@ -2749,7 +3060,8 @@ function BulkSchedulePage() {
                 submitting ||
                 selectedAccounts.length === 0 ||
                 videoFiles.length === 0 ||
-                (!isRandomTimeMode && postingTimes.length === 0)
+                (scheduleMode === "fixed" && postingTimes.length === 0) ||
+                (scheduleMode === "interval" && (!intervalStartTime || intervalMinutes <= 0))
               }
               className="w-full bg-gradient-brand text-primary-foreground border-0 hover:opacity-90 h-12 shadow-glow text-sm font-extrabold cursor-pointer"
             >
