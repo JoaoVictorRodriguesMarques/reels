@@ -191,12 +191,12 @@ export const generateMetaConnectLink = createServerFn({ method: "POST" })
       const igAppId = process.env.INSTAGRAM_APP_ID || "1386867933636927";
       const redirectUri = `${origin}/auth/instagram/callback`;
       const params = new URLSearchParams({
-        enable_fb_login: "0",
-        force_authentication: "1",
+        force_reauth: "true",
         client_id: igAppId,
         redirect_uri: redirectUri,
         response_type: "code",
-        scope: "instagram_business_basic,instagram_business_content_publish",
+        scope:
+          "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_messages,instagram_business_manage_comments",
         state: stateToken,
       });
       authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`;
