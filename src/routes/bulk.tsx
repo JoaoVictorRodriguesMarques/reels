@@ -1877,39 +1877,42 @@ function BulkSchedulePage() {
                 </Label>
 
                 {/* Mode Switcher */}
-                <div className="grid grid-cols-3 p-1 bg-secondary/60 rounded-xl border border-border/40 gap-1">
+                <div className="grid grid-cols-3 p-1.5 bg-secondary/80 rounded-2xl border border-border/60 gap-1.5 shadow-sm">
                   <button
                     type="button"
                     onClick={() => setScheduleMode("fixed")}
-                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                    className={`px-3 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
                       scheduleMode === "fixed"
-                        ? "bg-primary text-primary-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-primary text-primary-foreground shadow-md font-black"
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                     }`}
                   >
-                    Horários Fixos
+                    <Clock className="size-3.5 shrink-0" />
+                    <span>Horários Fixos</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setScheduleMode("interval")}
-                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                    className={`px-3 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 text-center ${
                       scheduleMode === "interval"
-                        ? "bg-primary text-primary-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-gradient-brand text-primary-foreground shadow-glow font-black"
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                     }`}
                   >
-                    <Timer className="size-3.5 shrink-0" /> A Cada X Tempo
+                    <Timer className="size-3.5 shrink-0 text-amber-300" />
+                    <span>A Cada X Tempo</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setScheduleMode("random")}
-                    className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer text-center ${
+                    className={`px-3 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
                       scheduleMode === "random"
-                        ? "bg-primary text-primary-foreground shadow-sm"
+                        ? "bg-primary text-primary-foreground shadow-md font-black"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    Horários Aleatórios
+                    <Shuffle className="size-3.5 shrink-0" />
+                    <span>Aleatórios</span>
                   </button>
                 </div>
               </div>
@@ -1933,7 +1936,7 @@ function BulkSchedulePage() {
 
               {/* Mode 1: Interval Mode (A Cada X Tempo) */}
               {scheduleMode === "interval" && (
-                <div className="space-y-4">
+                <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
                   {/* First Post Start Time and Selected Interval Summary */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
@@ -1957,14 +1960,15 @@ function BulkSchedulePage() {
 
                     <div className="space-y-1.5">
                       <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                        <Timer className="size-3.5 text-primary" /> Intervalo Selecionado
+                        <Timer className="size-3.5 text-primary" /> Intervalo Ativo
                       </Label>
-                      <div className="h-10 px-3 rounded-lg border border-border/60 bg-secondary/30 flex items-center justify-between">
-                        <span className="text-xs font-bold text-foreground">
-                          A cada <strong className="text-primary font-mono text-sm">{formatIntervalLabel(intervalMinutes)}</strong>
+                      <div className="h-10 px-3 rounded-lg border border-primary/30 bg-primary/10 flex items-center justify-between">
+                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <Timer className="size-3.5 text-primary" />
+                          A cada <strong className="text-primary font-mono text-sm font-black">{formatIntervalLabel(intervalMinutes)}</strong>
                         </span>
-                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                          {intervalMinutes} minutos
+                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-primary text-primary-foreground">
+                          {intervalMinutes} min
                         </span>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
@@ -1974,7 +1978,7 @@ function BulkSchedulePage() {
                   </div>
 
                   {/* Interval Presets & Custom Control */}
-                  <div className="space-y-3 p-3.5 rounded-xl bg-secondary/20 border border-border/40">
+                  <div className="space-y-3 p-4 rounded-2xl bg-secondary/30 border border-border/60 shadow-xs">
                     <Label className="text-xs font-bold text-foreground flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <Zap className="size-3.5 text-primary" /> Escolha o Intervalo entre Posts
@@ -1987,10 +1991,15 @@ function BulkSchedulePage() {
                     {/* Preset buttons */}
                     <div className="flex flex-wrap items-center gap-1.5">
                       {[
+                        { label: "10 min", val: 10 },
                         { label: "15 min", val: 15 },
+                        { label: "20 min", val: 20 },
                         { label: "30 min", val: 30 },
+                        { label: "40 min", val: 40 },
                         { label: "45 min", val: 45 },
+                        { label: "50 min", val: 50 },
                         { label: "1 hora", val: 60 },
+                        { label: "1h 20m", val: 80 },
                         { label: "1h 30m", val: 90 },
                         { label: "2 horas", val: 120 },
                         { label: "3 horas", val: 180 },
@@ -2013,9 +2022,9 @@ function BulkSchedulePage() {
                               setCustomIntervalUnit("minutes");
                             }
                           }}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
                             intervalMinutes === p.val
-                              ? "bg-primary text-primary-foreground border-primary shadow-xs"
+                              ? "bg-gradient-brand text-primary-foreground border-primary shadow-sm font-black"
                               : "bg-card text-muted-foreground hover:text-foreground border-border/50 hover:bg-secondary"
                           }`}
                         >
