@@ -265,6 +265,17 @@ function BulkSchedulePage() {
   const [loopTargetValue, setLoopTargetValue] = useState<number>(30); // 30 dias padrão
   const [loopCycles, setLoopCycles] = useState<number>(5); // 5 ciclos padrão
 
+  // Batch & Burst states
+  const [batchSize, setBatchSize] = useState(1);
+  const [slotSpacingMinutes, setSlotSpacingMinutes] = useState(2);
+  const [isBurstRandomMode, setIsBurstRandomMode] = useState(true);
+  const [burstTrigger, setBurstTrigger] = useState(0);
+  const [stableBurstDelays, setStableBurstDelays] = useState<Record<string, number[]>>({});
+  const [isRandomBatchSize, setIsRandomBatchSize] = useState(false);
+  const [minBatchSize, setMinBatchSize] = useState(10);
+  const [maxBatchSize, setMaxBatchSize] = useState(18);
+  const [stableBurstSizes, setStableBurstSizes] = useState<Record<string, number[]>>({});
+
   // Randomize state
   const [randomize, setRandomize] = useState(false);
   const [distributionMode, setDistributionMode] = useState<"normal" | "trial_only" | "both">("normal");
@@ -272,6 +283,14 @@ function BulkSchedulePage() {
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
   const [scheduledSummary, setScheduledSummary] = useState<Record<string, { count: number; lastDate: string | null }>>({});
+
+  // Upload progress and submitting states
+  const [submitting, setSubmitting] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   // Memoized effective total slots per account considering loop mode
   const effectiveQueueLength = useMemo(() => {
@@ -343,23 +362,6 @@ function BulkSchedulePage() {
     const cycleOrder = getCycleVideoOrder(accId, cycleIndex, baseOrder);
     return cycleOrder[withinCycleIdx] ?? withinCycleIdx;
   };
-
-  // Upload progress and submitting states
-  const [submitting, setSubmitting] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState("");
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [batchSize, setBatchSize] = useState(1);
-  const [slotSpacingMinutes, setSlotSpacingMinutes] = useState(2);
-  const [isBurstRandomMode, setIsBurstRandomMode] = useState(true);
-  const [burstTrigger, setBurstTrigger] = useState(0);
-  const [stableBurstDelays, setStableBurstDelays] = useState<Record<string, number[]>>({});
-  const [isRandomBatchSize, setIsRandomBatchSize] = useState(false);
-  const [minBatchSize, setMinBatchSize] = useState(10);
-  const [maxBatchSize, setMaxBatchSize] = useState(18);
-  const [stableBurstSizes, setStableBurstSizes] = useState<Record<string, number[]>>({});
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
 
   // Load visible accounts on mount
   useEffect(() => {
