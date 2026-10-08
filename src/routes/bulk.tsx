@@ -25,6 +25,9 @@ import {
   RotateCcw,
   Users,
   Timer,
+  Repeat,
+  Infinity,
+  Flame,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -256,6 +259,12 @@ function BulkSchedulePage() {
   const [stableRandomTimes, setStableRandomTimes] = useState<Record<string, string[][]>>({});
   const [randomTrigger, setRandomTrigger] = useState(0);
 
+  // Loop Mode states (repetir vídeos em loop contínuo/infinito)
+  const [isLoopMode, setIsLoopMode] = useState(false);
+  const [loopTargetType, setLoopTargetType] = useState<"days" | "cycles" | "total_posts">("days");
+  const [loopTargetValue, setLoopTargetValue] = useState<number>(30); // 30 dias padrão
+  const [loopCycles, setLoopCycles] = useState<number>(5); // 5 ciclos padrão
+
   // Randomize state
   const [randomize, setRandomize] = useState(false);
   const [distributionMode, setDistributionMode] = useState<"normal" | "trial_only" | "both">("normal");
@@ -263,6 +272,77 @@ function BulkSchedulePage() {
   const [accountVideoOrders, setAccountVideoOrders] = useState<Record<string, number[]>>({});
   const [lastScheduledDates, setLastScheduledDates] = useState<Record<string, string>>({});
   const [scheduledSummary, setScheduledSummary] = useState<Record<string, { count: number; lastDate: string | null }>>({});
+
+  // Memoized effective total slots per account considering loop mode
+  const effectiveQueueLength = useMemo(() => {
+    if (videoFiles.length === 0) return 0;
+    if (!isLoopMode) return videoFiles.length;
+
+    if (loopTargetType === "cycles") {
+      return videoFiles.length * Math.max(1, loopCycles);
+    }
+    if (loopTargetType === "days") {
+      let postsPerDay = 1;
+      if (scheduleMode === "interval") {
+        postsPerDay = Math.max(1, Math.round(1440 / Math.max(1, intervalMinutes)));
+      } else if (scheduleMode === "random") {
+        postsPerDay = Math.max(1, randomCountPerDay * batchSize);
+      } else {
+        postsPerDay = Math.max(1, postingTimes.length * batchSize);
+      }
+      return Math.max(videoFiles.length, Math.ceil(loopTargetValue * postsPerDay));
+    }
+    if (loopTargetType === "total_posts") {
+      return Math.max(videoFiles.length, Math.max(1, loopTargetValue));
+    }
+    return videoFiles.length;
+  }, [
+    videoFiles.length,
+    isLoopMode,
+    loopTargetType,
+    loopCycles,
+    loopTargetValue,
+    scheduleMode,
+    intervalMinutes,
+    randomCountPerDay,
+    postingTimes.length,
+    batchSize,
+  ]);
+
+  // Permutation generator for cycles when randomize is enabled
+  function getCycleVideoOrder(accId: string, cycle: number, baseOrder: number[]): number[] {
+    if (cycle === 0 || baseOrder.length <= 1) return baseOrder;
+    const arr = [...baseOrder];
+    let seed = 0;
+    for (let i = 0; i < accId.length; i++) seed += accId.charCodeAt(i);
+    seed += cycle * 997;
+    for (let i = arr.length - 1; i > 0; i--) {
+      seed = (seed * 9301 + 49297) % 233280;
+      const j = Math.floor((seed / 233280) * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  const getVideoIndexForSlot = (accId: string, queueIdx: number): number => {
+    if (videoFiles.length === 0) return 0;
+    const cycleIndex = Math.floor(queueIdx / videoFiles.length);
+    const withinCycleIdx = queueIdx % videoFiles.length;
+
+    const baseOrder =
+      accountVideoOrders[accId] || Array.from({ length: videoFiles.length }, (_, i) => i);
+
+    if (!randomize) {
+      return withinCycleIdx;
+    }
+
+    if (cycleIndex === 0) {
+      return baseOrder[withinCycleIdx] ?? withinCycleIdx;
+    }
+
+    const cycleOrder = getCycleVideoOrder(accId, cycleIndex, baseOrder);
+    return cycleOrder[withinCycleIdx] ?? withinCycleIdx;
+  };
 
   // Upload progress and submitting states
   const [submitting, setSubmitting] = useState(false);
@@ -377,7 +457,7 @@ function BulkSchedulePage() {
 
   // Generate random posting times per account and day reactively in random mode
   useEffect(() => {
-    if (!isRandomTimeMode || selectedAccounts.length === 0 || videoFiles.length === 0) {
+    if (!isRandomTimeMode || selectedAccounts.length === 0 || effectiveQueueLength === 0) {
       return;
     }
 
@@ -390,7 +470,7 @@ function BulkSchedulePage() {
 
     selectedAccounts.forEach((accId) => {
       const accountTimes: string[][] = [];
-      const totalSlots = Math.ceil(videoFiles.length / batchSize);
+      const totalSlots = Math.ceil(effectiveQueueLength / batchSize);
       const totalDays = Math.ceil(totalSlots / randomCountPerDay);
 
       for (let d = 0; d < totalDays; d++) {
@@ -417,7 +497,7 @@ function BulkSchedulePage() {
   }, [
     isRandomTimeMode,
     selectedAccounts,
-    videoFiles.length,
+    effectiveQueueLength,
     randomStartHour,
     randomEndHour,
     randomCountPerDay,
@@ -427,7 +507,7 @@ function BulkSchedulePage() {
 
   // Generate organic random burst delays per account in burst mode
   useEffect(() => {
-    if (!isBurstRandomMode || selectedAccounts.length === 0 || videoFiles.length === 0) {
+    if (!isBurstRandomMode || selectedAccounts.length === 0 || effectiveQueueLength === 0) {
       return;
     }
 
@@ -438,7 +518,7 @@ function BulkSchedulePage() {
       delays.push(Math.floor(Math.random() * 35) + 10);
 
       // Subsequent videos have organic delays (+10s to +105s, weighted around 35-45s)
-      for (let i = 1; i < videoFiles.length; i++) {
+      for (let i = 1; i < effectiveQueueLength; i++) {
         const rand = Math.random();
         let delta = 36;
         if (rand < 0.15) {
@@ -460,11 +540,11 @@ function BulkSchedulePage() {
     });
 
     setStableBurstDelays(newDelays);
-  }, [isBurstRandomMode, selectedAccounts, videoFiles.length, burstTrigger]);
+  }, [isBurstRandomMode, selectedAccounts, effectiveQueueLength, burstTrigger]);
 
   // Generate burst sizes per account (fixed batch size or randomized burst sizes)
   useEffect(() => {
-    if (selectedAccounts.length === 0 || videoFiles.length === 0) {
+    if (selectedAccounts.length === 0 || effectiveQueueLength === 0) {
       return;
     }
 
@@ -472,11 +552,11 @@ function BulkSchedulePage() {
     selectedAccounts.forEach((accId) => {
       if (isRandomBatchSize) {
         // Random sizes between minBatchSize and maxBatchSize (e.g. 13, 17, 14)
-        newBurstSizes[accId] = generateBurstSizes(videoFiles.length, minBatchSize, maxBatchSize);
+        newBurstSizes[accId] = generateBurstSizes(effectiveQueueLength, minBatchSize, maxBatchSize);
       } else {
-        const count = Math.ceil(videoFiles.length / batchSize);
+        const count = Math.ceil(effectiveQueueLength / batchSize);
         const sizes: number[] = [];
-        let rem = videoFiles.length;
+        let rem = effectiveQueueLength;
         for (let b = 0; b < count; b++) {
           const s = Math.min(batchSize, rem);
           sizes.push(s);
@@ -493,7 +573,7 @@ function BulkSchedulePage() {
     maxBatchSize,
     batchSize,
     selectedAccounts,
-    videoFiles.length,
+    effectiveQueueLength,
     burstTrigger,
   ]);
 
@@ -804,6 +884,7 @@ function BulkSchedulePage() {
     burstIndex?: number;
     burstSize?: number;
     isFirstInBurst?: boolean;
+    cycleNumber?: number;
   }
 
   const getScheduleSlots = (): ScheduleSlot[] => {
@@ -820,24 +901,25 @@ function BulkSchedulePage() {
     const slots: ScheduleSlot[] = [];
     const sortedTimes = [...postingTimes].sort();
     const [year, month, day] = startDate.split("-").map(Number);
+    const effectiveTotal = effectiveQueueLength;
+    const queueIndices = Array.from({ length: effectiveTotal }, (_, i) => i);
 
     selectedAccounts.forEach((accId) => {
       const account = accounts.find((a) => a.id === accId);
       if (!account) return;
 
-      const order =
-        accountVideoOrders[accId] || Array.from({ length: videoFiles.length }, (_, i) => i);
-
       const coverInfo = getCoverForAccount(accId);
 
-      order.forEach((videoIdx, i) => {
+      queueIndices.forEach((queueIdx) => {
+        const videoIdx = getVideoIndexForSlot(accId, queueIdx);
         if (videoIdx >= videoFiles.length) return;
 
+        const cycleNumber = Math.floor(queueIdx / videoFiles.length) + 1;
         let timeStr = "";
         let burstDelta: number | undefined = undefined;
 
         const { burstIndex, withinBurstIndex, burstSize, isFirstInBurst } = getBurstSlotIndices(
-          i,
+          queueIdx,
           stableBurstSizes[accId] || [],
           batchSize,
         );
@@ -949,6 +1031,7 @@ function BulkSchedulePage() {
           burstIndex,
           burstSize,
           isFirstInBurst,
+          cycleNumber,
         });
       });
     });
@@ -1166,16 +1249,16 @@ function BulkSchedulePage() {
 
       // 3. Prepare DB records
       const postsToInsert: any[] = [];
-      const sortedTimes = [...postingTimes].sort();
       const [year, month, day] = startDate.split("-").map(Number);
+      const queueIndices = Array.from({ length: effectiveQueueLength }, (_, idx) => idx);
 
       selectedAccounts.forEach((accId) => {
-        const order =
-          accountVideoOrders[accId] || Array.from({ length: totalVideos }, (_, idx) => idx);
-
         const assignedCoverUrl = accountCoverUrlMap[accId] || null;
 
-        order.forEach((videoIdx, i) => {
+        queueIndices.forEach((queueIdx) => {
+          const videoIdx = getVideoIndexForSlot(accId, queueIdx);
+          const i = queueIdx;
+
           let dayIndex = 0;
           let hours = 12;
           let minutes = 0;
@@ -1313,9 +1396,13 @@ function BulkSchedulePage() {
         });
       });
 
-      // 4. Batch insert posts
-      const { error: dbErr } = await supabase.from("scheduled_posts").insert(postsToInsert);
-      if (dbErr) throw dbErr;
+      // 4. Batch insert posts in chunks of 100 to avoid payload size/timeout issues
+      const CHUNK_SIZE = 100;
+      for (let i = 0; i < postsToInsert.length; i += CHUNK_SIZE) {
+        const chunk = postsToInsert.slice(i, i + CHUNK_SIZE);
+        const { error: dbErr } = await supabase.from("scheduled_posts").insert(chunk);
+        if (dbErr) throw dbErr;
+      }
 
       setUploadProgress(100);
       setUploadStatus("Agendado com sucesso!");
@@ -2545,7 +2632,213 @@ function BulkSchedulePage() {
                 </div>
               )}
 
-              {/* Quantity of videos per time slot (Container / Batch Size) */}
+              {/* Loop Mode Card */}
+              <div className={`space-y-4 p-4 rounded-xl border transition-all ${
+                isLoopMode
+                  ? "border-purple-500/60 bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-transparent shadow-sm"
+                  : "border-border/60 bg-secondary/15"
+              }`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <Repeat className={`size-4 ${isLoopMode ? "text-purple-400" : "text-primary"}`} /> Modo Loop Contínuo / Repetição Infinita
+                      </Label>
+                      <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 flex items-center gap-1">
+                        <Flame className="size-2.5" /> Automação
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 max-w-lg">
+                      Upe os vídeos uma única vez e o sistema agenda postagens contínuas em loop (até a meta definida ou até a conta cair), variando a ordem a cada ciclo.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 bg-card/60 px-2.5 py-1 rounded-lg border border-border/60">
+                    <Label htmlFor="loop-mode-switch" className="text-xs font-bold text-muted-foreground cursor-pointer">
+                      🔁 Ativar Loop
+                    </Label>
+                    <Switch
+                      id="loop-mode-switch"
+                      checked={isLoopMode}
+                      onCheckedChange={setIsLoopMode}
+                    />
+                  </div>
+                </div>
+
+                {isLoopMode && (
+                  <div className="pt-3 border-t border-border/40 space-y-3.5">
+                    {/* Mode Selector Tabs */}
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        Como deseja definir a duração do Loop?
+                      </Label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoopTargetType("days");
+                            setLoopTargetValue(30);
+                          }}
+                          className={`p-2.5 rounded-lg border text-xs font-bold transition-all text-center ${
+                            loopTargetType === "days"
+                              ? "border-purple-500 bg-purple-500/20 text-purple-300 shadow-sm"
+                              : "border-border/60 bg-card hover:bg-secondary text-muted-foreground"
+                          }`}
+                        >
+                          📅 Por Dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoopTargetType("cycles");
+                            setLoopTargetValue(5);
+                          }}
+                          className={`p-2.5 rounded-lg border text-xs font-bold transition-all text-center ${
+                            loopTargetType === "cycles"
+                              ? "border-purple-500 bg-purple-500/20 text-purple-300 shadow-sm"
+                              : "border-border/60 bg-card hover:bg-secondary text-muted-foreground"
+                          }`}
+                        >
+                          🔁 Por Ciclos (Repetições)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoopTargetType("total_posts");
+                            setLoopTargetValue(100);
+                          }}
+                          className={`p-2.5 rounded-lg border text-xs font-bold transition-all text-center ${
+                            loopTargetType === "total_posts"
+                              ? "border-purple-500 bg-purple-500/20 text-purple-300 shadow-sm"
+                              : "border-border/60 bg-card hover:bg-secondary text-muted-foreground"
+                          }`}
+                        >
+                          🎬 Total de Posts
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Presets & Value Input */}
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Label className="text-[11px] font-semibold text-muted-foreground">
+                          {loopTargetType === "days"
+                            ? "Quantidade de dias de postagem:"
+                            : loopTargetType === "cycles"
+                            ? "Número de vezes que a lista será repetida:"
+                            : "Total de publicações por conta:"}
+                        </Label>
+
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center bg-card border border-border/80 rounded-lg p-0.5 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => setLoopTargetValue((prev) => Math.max(1, prev - 1))}
+                              className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                            >
+                              -
+                            </button>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={10000}
+                              value={loopTargetValue}
+                              onChange={(e) =>
+                                setLoopTargetValue(Math.max(1, parseInt(e.target.value) || 1))
+                              }
+                              className="w-20 h-8 text-center text-xs font-black bg-transparent border-0 focus-visible:ring-0 p-0 shadow-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setLoopTargetValue((prev) => prev + 1)}
+                              className="size-8 rounded-md hover:bg-secondary flex items-center justify-center text-base font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {loopTargetType === "days" &&
+                          [7, 15, 30, 60, 90, 180, 365].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setLoopTargetValue(val)}
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-md border transition-all ${
+                                loopTargetValue === val
+                                  ? "bg-purple-500/20 text-purple-300 border-purple-500"
+                                  : "bg-card text-muted-foreground border-border/50 hover:bg-secondary"
+                              }`}
+                            >
+                              {val === 30
+                                ? "30d (1 mês)"
+                                : val === 60
+                                ? "60d (2 meses)"
+                                : val === 90
+                                ? "90d (3 meses)"
+                                : val === 180
+                                ? "180d (6 meses)"
+                                : val === 365
+                                ? "365d (1 ano)"
+                                : `${val} dias`}
+                            </button>
+                          ))}
+
+                        {loopTargetType === "cycles" &&
+                          [2, 3, 5, 10, 20, 50, 100].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setLoopTargetValue(val)}
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-md border transition-all ${
+                                loopTargetValue === val
+                                  ? "bg-purple-500/20 text-purple-300 border-purple-500"
+                                  : "bg-card text-muted-foreground border-border/50 hover:bg-secondary"
+                              }`}
+                            >
+                              {val}x repetições
+                            </button>
+                          ))}
+
+                        {loopTargetType === "total_posts" &&
+                          [50, 100, 250, 500, 1000, 2000].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setLoopTargetValue(val)}
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-md border transition-all ${
+                                loopTargetValue === val
+                                  ? "bg-purple-500/20 text-purple-300 border-purple-500"
+                                  : "bg-card text-muted-foreground border-border/50 hover:bg-secondary"
+                              }`}
+                            >
+                              {val} posts
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+
+                    {/* Loop Summary Banner */}
+                    <div className="p-3 bg-purple-500/10 border border-purple-500/25 rounded-xl space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-purple-300 font-bold">
+                        <span className="flex items-center gap-1.5">
+                          <Infinity className="size-3.5" /> Estatísticas do Loop
+                        </span>
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-purple-500/20 border border-purple-500/40">
+                          {loopCycles} {loopCycles === 1 ? "Ciclo" : "Ciclos"} • {effectiveQueueLength} posts / conta
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Com <strong>{videoFiles.length} {videoFiles.length === 1 ? "vídeo" : "vídeos"}</strong> e as configurações atuais, cada conta executará <strong>{effectiveQueueLength} publicações</strong> ao longo de <strong>{loopCycles} ciclos</strong>. Se a ordem aleatória estiver ativa, cada ciclo terá uma sequência diferente para máxima proteção anti-spam.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Quantity of videos per time slot (Container / Batch Size) */}
               <div className="space-y-3 p-4 rounded-xl border border-border/60 bg-secondary/15">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3177,13 +3470,18 @@ function BulkSchedulePage() {
                                   )}
 
                                   <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
                                       <span
                                         className="font-extrabold truncate"
                                         style={{ color: slot.accountColor }}
                                       >
                                         @{slot.accountUsername}
                                       </span>
+                                      {isLoopMode && slot.cycleNumber !== undefined && (
+                                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1 shrink-0">
+                                          <Repeat className="size-2.5" /> Ciclo {slot.cycleNumber}
+                                        </span>
+                                      )}
                                     </div>
                                     <span
                                       className="truncate text-muted-foreground/80 font-mono text-[10px] block"
